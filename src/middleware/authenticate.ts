@@ -22,7 +22,7 @@ export const authenticate = (
   const tokenFromCookie = req.cookies?.token;
 
   // Fallback to Authorization header
-  const tokenFromHeader = req.headers.authorization?.startsWith("Bearer ")
+  const tokenFromHeader = req.headers.authorization?.startsWith("token= ")
     ? req.headers.authorization.split(" ")[1]
     : null;
 
