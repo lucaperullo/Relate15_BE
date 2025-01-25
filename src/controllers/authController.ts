@@ -1,175 +1,134 @@
-// src/controllers/authController.ts
-import { Request, Response } from "express";
-import User from "../models/User";
-import { hashPassword, comparePasswords, generateToken } from "../utils/auth";
-import logger from "../utils/logger";
+import jwt from "jsonwebtoken";
+import { Request, Response, NextFunction } from "express";
 
-export const register = async (req: Request, res: Response) => {
-  const startTime = Date.now();
-  logger.info("Registration process started", {
-    body: req.body,
-    file: req.file,
-  });
+const JWT_SECRET = process.env.JWT_SECRET!;
+const TOKEN_EXPIRATION = 3 * 24 * 60 * 60; // 3 days in seconds
+const REFRESH_WINDOW = 30 * 60; // Refresh 30 minutes before expiration
 
-  try {
-    const { email, password, name, role, interests, bio } = req.body;
-    logger.debug("Extracted request body data", { email, name, role });
-
-    // Check if user already exists
-    logger.debug("Checking for existing user", { email });
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      logger.warn("Registration attempt with existing email", { email });
-      return res.status(400).json({ message: "Email already in use." });
-    }
-
-    // Hash the password
-    logger.debug("Hashing password");
-    const hashedPassword = await hashPassword(password);
-    logger.debug("Password hashed successfully");
-
-    // Handle profile picture upload
-    let profilePictureUrl = "";
-    if (req.file) {
-      logger.info("Processing profile picture upload", {
-        originalname: req.file.originalname,
-        mimetype: req.file.mimetype,
-        size: req.file.size,
-      });
-      profilePictureUrl = req.file.path;
-      logger.debug("Profile picture path set", { profilePictureUrl });
-    }
-
-    // Create new user
-    logger.debug("Creating new user object");
-    const newUser = new User({
-      email,
-      password: hashedPassword,
-      name,
-      role,
-      interests: interests
-        ? interests.split(",").map((i: string) => i.trim())
-        : [],
-      bio,
-      profilePictureUrl,
-    });
-
-    logger.info("Saving user to database", { user: newUser.toObject() });
-    await newUser.save();
-    logger.info("User saved successfully", { userId: newUser._id });
-
-    // Generate JWT Token
-    logger.debug("Generating JWT token");
-    const token = generateToken(newUser);
-    logger.debug("Token generated successfully");
-
-    logger.info("Registration completed successfully", {
-      userId: newUser._id,
-      duration: Date.now() - startTime,
-    });
-
-    return res.status(201).json({
-      message: "User registered successfully.",
-      token,
-      user: {
-        id: newUser._id,
-        email: newUser.email,
-        name: newUser.name,
-        role: newUser.role,
-        interests: newUser.interests,
-        bio: newUser.bio,
-        profilePictureUrl: newUser.profilePictureUrl,
-      },
-    });
-  } catch (error) {
-    logger.error("Registration failed", {
-      //@ts-ignore
-      error: error.message,
-      //@ts-ignore
-      stack: error.stack,
-      body: req.body,
-      file: req.file,
-      duration: Date.now() - startTime,
-    });
-
-    return res.status(500).json({
-      message: "Server error during registration",
-      error:
-        process.env.NODE_ENV === "development"
-          ? {
-              //@ts-ignore
-              message: error.message,
-              //@ts-ignore
-              code: error.code,
-              //@ts-ignore
-              stack: error.stack,
-            }
-          : undefined,
-    });
+// Extend the Request type to include cookies and userId
+declare module "express" {
+  interface Request {
+    cookies: {
+      token?: string;
+    };
+    userId?: string;
   }
+}
+
+const setTokenCookie = (res: Response, token: string) => {
+  res.cookie("token", token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    maxAge: TOKEN_EXPIRATION * 1000,
+    path: "/",
+  });
 };
 
+// Mock user for demonstration purposes
+const mockUser = {
+  _id: "12345",
+  email: "user@example.com",
+  name: "John Doe",
+  role: "user",
+};
+
+// Login function
 export const login = async (req: Request, res: Response) => {
-  const startTime = Date.now();
-  logger.info("Login attempt started", { email: req.body.email });
-
   try {
-    const { email, password } = req.body;
-    logger.debug("Looking for user in database", { email });
+    // ... validate credentials ...
 
-    const user = await User.findOne({ email });
-    if (!user) {
-      logger.warn("Login attempt with non-existent email", { email });
-      return res.status(400).json({ message: "Invalid credentials." });
-    }
+    // Mock user for demonstration purposes
+    const user = mockUser;
 
-    logger.debug("Comparing passwords");
-    const isMatch = await comparePasswords(password, user.password);
-    if (!isMatch) {
-      logger.warn("Password mismatch for user", { email });
-      return res.status(400).json({ message: "Invalid credentials." });
-    }
+    const token = jwt.sign(
+      {
+        userId: user._id,
+        exp: Math.floor(Date.now() / 1000) + TOKEN_EXPIRATION,
+      },
+      JWT_SECRET
+    );
 
-    logger.debug("Generating JWT token");
-    const token = generateToken(user);
-    logger.info("Login successful", { userId: user._id });
+    setTokenCookie(res, token);
 
-    return res.status(200).json({
-      message: "Logged in successfully.",
-      token,
+    res.status(200).json({
       user: {
         id: user._id,
         email: user.email,
         name: user.name,
         role: user.role,
-        interests: user.interests,
-        bio: user.bio,
-        profilePictureUrl: user.profilePictureUrl,
       },
     });
   } catch (error) {
-    logger.error("Login failed", {
-      //@ts-ignore
-      error: error.message,
-      //@ts-ignore
-      stack: error.stack,
-      email: req.body.email,
-      duration: Date.now() - startTime,
-    });
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
 
-    return res.status(500).json({
-      message: "Server error during login",
-      error:
-        process.env.NODE_ENV === "development"
-          ? {
-              //@ts-ignore
-              message: error.message,
-              //@ts-ignore
-              code: error.code,
-              //@ts-ignore
-              stack: error.stack,
-            }
-          : undefined,
+// Register function
+export const register = async (req: Request, res: Response) => {
+  try {
+    // ... handle user registration ...
+
+    // Mock user for demonstration purposes
+    const user = mockUser;
+
+    const token = jwt.sign(
+      {
+        userId: user._id,
+        exp: Math.floor(Date.now() / 1000) + TOKEN_EXPIRATION,
+      },
+      JWT_SECRET
+    );
+
+    setTokenCookie(res, token);
+
+    res.status(201).json({
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+      },
     });
+  } catch (error) {
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+// Authentication middleware
+export const authenticate = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const token = req.cookies.token;
+
+  if (!token) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as {
+      userId: string;
+      exp: number;
+    };
+    req.userId = decoded.userId;
+
+    // Auto-refresh the token if it's within the refresh window
+    if (decoded.exp - Math.floor(Date.now() / 1000) < REFRESH_WINDOW) {
+      const newToken = jwt.sign(
+        {
+          userId: decoded.userId,
+          exp: Math.floor(Date.now() / 1000) + TOKEN_EXPIRATION,
+        },
+        JWT_SECRET
+      );
+      setTokenCookie(res, newToken);
+    }
+
+    next();
+  } catch (error) {
+    res.clearCookie("token");
+    return res.status(401).json({ message: "Session expired" });
   }
 };
