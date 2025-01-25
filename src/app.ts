@@ -7,6 +7,7 @@ import authRoutes from "./routes/authRoutes";
 import queueRoutes from "./routes/queueRoutes";
 import errorHandler from "./middleware/errorHandler";
 import expressListEndpoints from "express-list-endpoints";
+import calendarRoutes from "./routes/calendarRoutes";
 
 dotenv.config();
 const app = express();
@@ -41,6 +42,7 @@ app.use(express.json());
 // 5. Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/queue", queueRoutes);
+app.use("/api/calendar", calendarRoutes);
 
 // Health check
 app.get("/api/health", (req, res) => {
