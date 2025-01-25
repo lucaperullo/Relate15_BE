@@ -2,49 +2,46 @@ import express from "express";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import cors from "cors";
+import helmet from "helmet";
 import authRoutes from "./routes/authRoutes";
 import queueRoutes from "./routes/queueRoutes";
-import expressListEndpoints from "express-list-endpoints";
 import errorHandler from "./middleware/errorHandler";
-import session from "express-session";
 
 dotenv.config();
-
 const app = express();
 
-// Configure CORS first
-const corsOptions = {
-  origin: ["https://relate15.vercel.app", "http://localhost:3000"],
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
-  credentials: true,
-};
+// 1. Trust proxy first
+app.set("trust proxy", 1);
 
-app.use(cors(corsOptions));
-
-// Session configuration (if using cookies)
+// 2. Security headers
+app.use(helmet());
 app.use(
-  session({
-    secret: process.env.SESSION_SECRET || "your-secret-key",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      domain: ".onrender.com", // Allow subdomains
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "none",
-      maxAge: 3 * 24 * 60 * 60 * 1000, // 3 days
-    },
+  helmet.hsts({
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true,
   })
 );
 
-// Middleware
+// 3. CORS configuration
+const corsOptions = {
+  origin: ["https://relate15.vercel.app", "http://localhost:3000"],
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  exposedHeaders: ["Set-Cookie", "Authorization"],
+  credentials: true,
+  maxAge: 600,
+};
+app.use(cors(corsOptions));
+
+// 4. Body parsers
 app.use(express.json());
 
-// Routes
+// 5. Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/queue", queueRoutes);
 
-// Health Check Route
+// Health check
 app.get("/api/health", (req, res) => {
   res.status(200).json({ status: "OK" });
 });
@@ -57,16 +54,6 @@ const connectDB = async () => {
   try {
     await mongoose.connect(process.env.MONGODB_URI || "");
     console.log("MongoDB connected.");
-
-    // Log registered endpoints
-    console.log("\nRegistered Endpoints:");
-    const endpoints = expressListEndpoints(app);
-    endpoints.forEach((endpoint) => {
-      endpoint.methods.forEach((method) => {
-        console.log(`${method.padEnd(6)} ${endpoint.path}`);
-      });
-    });
-    console.log("\n");
   } catch (err) {
     console.error("MongoDB connection error:", err);
     process.exit(1);
