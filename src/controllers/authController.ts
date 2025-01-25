@@ -15,30 +15,44 @@ const JWT_SECRET = process.env.JWT_SECRET!;
 const TOKEN_EXPIRATION = 3 * 24 * 60 * 60; // 3 days in seconds
 const REFRESH_WINDOW = 30 * 60; // 30 minutes before expiration
 
+/**
+ * Sets the authentication cookie with secure configurations.
+ */
 const setAuthCookie = (res: Response, token: string) => {
   res.cookie("token", token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "none",
-    maxAge: TOKEN_EXPIRATION * 1000,
-    path: "/",
+    httpOnly: true, // Prevent client-side JS access
+    secure: process.env.NODE_ENV === "production", // HTTPS only in production
+    sameSite: "none", // Allow cross-origin cookies
+    domain: process.env.NODE_ENV === "production" ? ".onrender.com" : undefined, // Domain for production
+    partitioned: true, // Required for Chrome's new cookie partitioning
+    path: "/", // Accessible across all paths
+    maxAge: TOKEN_EXPIRATION * 1000, // 3 days
   });
+
+  // Add security headers for cross-origin isolation
+  res.header("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
+  res.header("Cross-Origin-Embedder-Policy", "credentialless");
+  res.header("Access-Control-Allow-Credentials", "true");
 };
 
+/**
+ * Registers a new user.
+ */
 export const register = async (req: Request, res: Response) => {
   logger.info("Registration process started", { body: req.body });
 
   try {
     const { email, password, name, role, interests, bio } = req.body;
 
+    // Check if user already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       logger.warn("Registration attempt with existing email", { email });
       return res.status(400).json({ message: "Email already in use." });
     }
 
+    // Hash password and create user
     const hashedPassword = await hashPassword(password);
-
     const newUser = new User({
       email,
       password: hashedPassword,
@@ -51,6 +65,7 @@ export const register = async (req: Request, res: Response) => {
 
     await newUser.save();
 
+    // Generate token and set cookie
     const token = generateToken(newUser);
     setAuthCookie(res, token);
 
@@ -75,6 +90,9 @@ export const register = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Logs in a user.
+ */
 export const login = async (req: Request, res: Response) => {
   logger.info("Login attempt started", { email: req.body.email });
 
@@ -82,11 +100,13 @@ export const login = async (req: Request, res: Response) => {
     const { email, password } = req.body;
     const user = await User.findOne({ email });
 
+    // Validate credentials
     if (!user || !(await comparePasswords(password, user.password))) {
       logger.warn("Invalid login attempt", { email });
       return res.status(400).json({ message: "Invalid credentials." });
     }
 
+    // Generate token and set cookie
     const token = generateToken(user);
     setAuthCookie(res, token);
 
@@ -111,12 +131,16 @@ export const login = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Middleware to authenticate requests.
+ */
 export const authenticate = async (
   req: Request,
   res: Response,
   next: NextFunction
 ) => {
-  const token = req.cookies?.token;
+  // Check both cookies and Authorization header
+  const token = req.cookies?.token || req.headers.authorization?.split(" ")[1];
 
   if (!token) {
     logger.warn("Unauthorized access attempt - missing token");
@@ -124,6 +148,7 @@ export const authenticate = async (
   }
 
   try {
+    // Verify token
     const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
     const user = await User.findById(decoded.userId);
 
@@ -133,13 +158,15 @@ export const authenticate = async (
       return res.status(401).json({ message: "Invalid session" });
     }
 
+    // Attach user ID to request
     req.userId = user._id.toString();
 
-    // Token refresh logic
+    // Refresh token if near expiration
     const payload = jwt.decode(token) as { exp?: number };
     if (payload.exp && payload.exp - Date.now() / 1000 < REFRESH_WINDOW) {
       const newToken = generateToken(user);
       setAuthCookie(res, newToken);
+      res.header("Authorization", `Bearer ${newToken}`); // Update header
       logger.info("Token refreshed", { userId: user._id });
     }
 
@@ -151,8 +178,12 @@ export const authenticate = async (
   }
 };
 
+/**
+ * Verifies the user's session.
+ */
 export const verify = async (req: Request, res: Response) => {
-  const token = req.cookies?.token;
+  // Check both cookies and Authorization header
+  const token = req.cookies?.token || req.headers.authorization?.split(" ")[1];
 
   if (!token) {
     logger.warn("Unauthorized access attempt - missing token");
@@ -160,6 +191,7 @@ export const verify = async (req: Request, res: Response) => {
   }
 
   try {
+    // Verify token
     const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
     const user = await User.findById(decoded.userId).select("-password");
 
@@ -168,6 +200,11 @@ export const verify = async (req: Request, res: Response) => {
       res.clearCookie("token");
       return res.status(401).json({ message: "Invalid session" });
     }
+
+    // Add security headers
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header("Access-Control-Expose-Headers", "Set-Cookie, Authorization");
+    res.header("Cache-Control", "no-store, max-age=0");
 
     return res.status(200).json({
       message: "Session verified",
