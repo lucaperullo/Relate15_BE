@@ -6,6 +6,7 @@ import helmet from "helmet";
 import authRoutes from "./routes/authRoutes";
 import queueRoutes from "./routes/queueRoutes";
 import errorHandler from "./middleware/errorHandler";
+import expressListEndpoints from "express-list-endpoints";
 
 dotenv.config();
 const app = express();
@@ -54,6 +55,7 @@ const connectDB = async () => {
   try {
     await mongoose.connect(process.env.MONGODB_URI || "");
     console.log("MongoDB connected.");
+    console.table(expressListEndpoints(app));
   } catch (err) {
     console.error("MongoDB connection error:", err);
     process.exit(1);
