@@ -7,7 +7,6 @@ import authRoutes from "./routes/authRoutes";
 import queueRoutes from "./routes/queueRoutes";
 import errorHandler from "./middleware/errorHandler";
 import expressListEndpoints from "express-list-endpoints";
-import cookieParser from "cookie-parser";
 
 dotenv.config();
 const app = express();
@@ -30,7 +29,7 @@ const corsOptions = {
   origin: ["https://relate15.vercel.app", "http://localhost:3000"],
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"],
-  exposedHeaders: ["Set-Cookie", "Authorization"],
+  exposedHeaders: ["Authorization"],
   credentials: true,
   maxAge: 600,
 };
@@ -50,7 +49,7 @@ app.get("/api/health", (req, res) => {
 
 // Error handling
 app.use(errorHandler);
-app.use(cookieParser());
+
 // MongoDB connection
 const connectDB = async () => {
   try {
