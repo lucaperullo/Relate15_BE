@@ -218,3 +218,100 @@ export const resetMatches = async (
     session.endSession();
   }
 };
+
+/**
+ * Get match history for the user.
+ */
+export const getMatchHistory = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      res.status(401).json({ message: "Authentication required" });
+      return;
+    }
+
+    // Find the user and populate the matches
+    const user = await User.findById(userId).populate("matches", "-password");
+
+    if (!user) {
+      res.status(404).json({ message: "User not found" });
+      return;
+    }
+
+    res.status(200).json(user.matches);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get the current match for the user.
+ */
+export const getCurrentMatch = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      res.status(401).json({ message: "Authentication required" });
+      return;
+    }
+
+    // Find the user and get the last match
+    const user = await User.findById(userId).populate("matches", "-password");
+
+    if (!user) {
+      res.status(404).json({ message: "User not found" });
+      return;
+    }
+
+    const currentMatch = user.matches[user.matches.length - 1]; // Assuming the last match is the current one
+
+    if (!currentMatch) {
+      res.status(404).json({ message: "No current match found" });
+      return;
+    }
+
+    res.status(200).json(currentMatch);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get match counts for the user.
+ */
+export const getMatchCounts = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      res.status(401).json({ message: "Authentication required" });
+      return;
+    }
+
+    // Find the user and get match counts
+    const user = await User.findById(userId);
+
+    if (!user) {
+      res.status(404).json({ message: "User not found" });
+      return;
+    }
+
+    res.status(200).json(user.matchCount);
+  } catch (error) {
+    next(error);
+  }
+};
