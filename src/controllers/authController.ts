@@ -3,6 +3,7 @@ import User from "../models/User";
 import { hashPassword, comparePasswords, generateToken } from "../utils/auth";
 import logger from "../utils/logger";
 import jwt from "jsonwebtoken";
+import cloudinary from "../utils/cloudinary";
 
 declare module "express" {
   interface Request {
@@ -18,11 +19,24 @@ export const register = async (req: Request, res: Response) => {
   try {
     const { email, password, name, role, interests, bio } = req.body;
 
+    // Check if user already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(400).json({ message: "Email already in use." });
     }
 
+    // Handle file upload
+    let profilePictureUrl = "";
+    if (req.file) {
+      // Upload to Cloudinary using existing configuration
+      const result = await cloudinary.uploader.upload(req.file.path, {
+        folder: "relate15/profile_pictures",
+        transformation: { width: 500, height: 500, crop: "limit" },
+      });
+      profilePictureUrl = result.secure_url;
+    }
+
+    // Create new user with Cloudinary URL
     const hashedPassword = await hashPassword(password);
     const newUser = new User({
       email,
@@ -31,13 +45,13 @@ export const register = async (req: Request, res: Response) => {
       role: role || "user",
       interests: interests?.split(",").map((i: string) => i.trim()) || [],
       bio,
-      profilePictureUrl: req.file?.path || "",
+      profilePictureUrl, // Use Cloudinary URL
     });
 
     await newUser.save();
 
+    // Generate token and respond
     const token = generateToken(newUser);
-
     return res.status(201).json({
       message: "User registered successfully.",
       token,
@@ -51,9 +65,10 @@ export const register = async (req: Request, res: Response) => {
     });
   } catch (error) {
     logger.error("Registration failed", { error });
-    return res
-      .status(500)
-      .json({ message: "Server error during registration" });
+    return res.status(500).json({
+      message: "Server error during registration",
+      ...(process.env.NODE_ENV === "development" && { error }),
+    });
   }
 };
 
