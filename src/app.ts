@@ -29,6 +29,7 @@ app.use(
     resave: false,
     saveUninitialized: false,
     cookie: {
+      domain: ".onrender.com", // Allow subdomains
       secure: process.env.NODE_ENV === "production",
       sameSite: "none",
       maxAge: 3 * 24 * 60 * 60 * 1000, // 3 days
