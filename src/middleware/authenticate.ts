@@ -20,6 +20,7 @@ export const authenticate = (
 ): void => {
   // Check for token in cookies first
   const tokenFromCookie = req.cookies?.token;
+  console.log(req.cookies);
 
   // Fallback to Authorization header
   const tokenFromHeader = req.headers.authorization?.startsWith("token= ")
