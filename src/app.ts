@@ -7,6 +7,7 @@ import authRoutes from "./routes/authRoutes";
 import queueRoutes from "./routes/queueRoutes";
 import errorHandler from "./middleware/errorHandler";
 import expressListEndpoints from "express-list-endpoints";
+import cookieParser from "cookie-parser";
 
 dotenv.config();
 const app = express();
@@ -49,7 +50,7 @@ app.get("/api/health", (req, res) => {
 
 // Error handling
 app.use(errorHandler);
-
+app.use(cookieParser());
 // MongoDB connection
 const connectDB = async () => {
   try {
