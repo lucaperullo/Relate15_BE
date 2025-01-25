@@ -16,7 +16,7 @@ const app = express();
 const corsOptions = {
   origin: ["https://relate15.vercel.app", "http://localhost:3000"],
   methods: ["GET", "POST", "PUT", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
   credentials: true,
 };
 
@@ -30,7 +30,7 @@ app.use(
     saveUninitialized: false,
     cookie: {
       secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      sameSite: "none",
       maxAge: 3 * 24 * 60 * 60 * 1000, // 3 days
     },
   })

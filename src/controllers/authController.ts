@@ -19,7 +19,7 @@ const setAuthCookie = (res: Response, token: string) => {
   res.cookie("token", token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    sameSite: "none",
     maxAge: TOKEN_EXPIRATION * 1000,
     path: "/",
   });
