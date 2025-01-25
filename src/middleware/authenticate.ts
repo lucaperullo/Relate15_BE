@@ -10,30 +10,45 @@ interface AuthRequest extends Request {
 
 const JWT_SECRET = process.env.JWT_SECRET || "default_secret";
 
+/**
+ * Authenticate middleware that checks both cookies and Authorization headers.
+ */
 export const authenticate = (
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ): void => {
-  const authHeader = req.headers.authorization;
+  // Check for token in cookies first
+  const tokenFromCookie = req.cookies?.token;
 
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    const token = authHeader.split(" ")[1];
+  // Fallback to Authorization header
+  const tokenFromHeader = req.headers.authorization?.startsWith("Bearer ")
+    ? req.headers.authorization.split(" ")[1]
+    : null;
 
-    try {
-      const decoded = jwt.verify(token, JWT_SECRET) as {
-        id: string;
-        email: string;
-      };
-      req.user = decoded;
-      next();
-    } catch (error) {
-      console.error("Invalid token:", error);
-      res.status(401).json({ message: "Unauthorized: Invalid token." });
-      return; // Exit without returning the response object
-    }
-  } else {
-    res.status(401).json({ message: "Unauthorized: No token provided." });
-    return; // Exit without returning the response object
+  // Use token from cookie or header
+  const token = tokenFromCookie || tokenFromHeader;
+
+  if (!token) {
+    console.error("Unauthorized: No token provided.");
+    //@ts-ignore
+    return res
+      .status(401)
+      .json({ message: "Unauthorized: No token provided." });
+  }
+
+  try {
+    // Verify the token
+    const decoded = jwt.verify(token, JWT_SECRET) as {
+      id: string;
+      email: string;
+    };
+
+    // Attach user to request
+    req.user = decoded;
+    next();
+  } catch (error) {
+    console.error("Invalid token:", error);
+    res.status(401).json({ message: "Unauthorized: Invalid token." });
   }
 };
