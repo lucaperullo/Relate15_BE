@@ -7,6 +7,7 @@ import {
   getMatchHistory,
   getCurrentMatch,
   getMatchCounts,
+  confirmParticipation,
 } from "../controllers/queueController";
 
 const router = express.Router();
@@ -138,5 +139,33 @@ router.get("/current-match", authenticate, asyncHandler(getCurrentMatch));
  *         description: User not found
  */
 router.get("/match-counts", authenticate, asyncHandler(getMatchCounts));
+
+/**
+ * @swagger
+ * /api/queue/confirm:
+ *   post:
+ *     tags: [Queue]
+ *     summary: Confirm participation in a match
+ *     description: Confirm participation and reset the queue state to allow joining again.
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Participation confirmed and queue state reset.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 state:
+ *                   type: string
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       400:
+ *         description: No active match to confirm.
+ */
+router.post("/confirm", authenticate, asyncHandler(confirmParticipation));
 
 export default router;

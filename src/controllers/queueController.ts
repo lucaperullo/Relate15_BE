@@ -315,3 +315,45 @@ export const getMatchCounts = async (
     next(error);
   }
 };
+
+export const confirmParticipation = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      res.status(401).json({ message: "Authentication required" });
+      return;
+    }
+
+    // Find the user's queue entry
+    const queueEntry = await Queue.findOne({ user: userId }).session(session);
+    if (!queueEntry || queueEntry.status !== "matched") {
+      res.status(400).json({ message: "No active match to confirm" });
+      return;
+    }
+
+    // Reset the queue state for the user
+    await Queue.deleteOne({ user: userId }).session(session);
+
+    // Update the user's queue status in the context (if needed)
+    // This can be done via the frontend by refetching the queue status.
+
+    await session.commitTransaction();
+
+    res.status(200).json({
+      message: "Participation confirmed. You can join the queue again.",
+      state: "idle",
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    next(error);
+  } finally {
+    session.endSession();
+  }
+};
