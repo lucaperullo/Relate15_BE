@@ -150,3 +150,38 @@ export const authenticate = async (
     return res.status(401).json({ message: "Invalid or expired token" });
   }
 };
+
+export const verify = async (req: Request, res: Response) => {
+  const token = req.cookies?.token;
+
+  if (!token) {
+    logger.warn("Unauthorized access attempt - missing token");
+    return res.status(401).json({ message: "Authentication required" });
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
+    const user = await User.findById(decoded.userId).select("-password");
+
+    if (!user) {
+      logger.warn("Invalid token - user not found");
+      res.clearCookie("token");
+      return res.status(401).json({ message: "Invalid session" });
+    }
+
+    return res.status(200).json({
+      message: "Session verified",
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        profilePictureUrl: user.profilePictureUrl,
+      },
+    });
+  } catch (error) {
+    logger.error("Session verification failed", { error });
+    res.clearCookie("token");
+    return res.status(401).json({ message: "Invalid or expired token" });
+  }
+};

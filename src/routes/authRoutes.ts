@@ -1,6 +1,6 @@
 // src/routes/authRoutes.ts
 import express from "express";
-import { register, login } from "../controllers/authController";
+import { register, login, verify } from "../controllers/authController";
 import parser from "../middleware/upload";
 import { asyncHandler } from "../utils/asyncHandler";
 import { body } from "express-validator";
@@ -54,7 +54,6 @@ router.post(
       .withMessage("Password must be at least 6 characters."),
     body("name").notEmpty().withMessage("Name is required."),
     body("role").notEmpty().withMessage("Role is required."),
-    // Add more validations as needed
   ],
   //@ts-ignore
   asyncHandler(register)
@@ -93,5 +92,29 @@ router.post(
   //@ts-ignore
   asyncHandler(login)
 );
+
+/**
+ * @swagger
+ * /api/auth/verify:
+ *   get:
+ *     summary: Verify user session
+ *     description: Check if the user's session is valid and return user data
+ *     responses:
+ *       200:
+ *         description: Session verified
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 user:
+ *                   $ref: '#/components/schemas/User'
+ *       401:
+ *         description: Unauthorized - Invalid or expired token
+ */
+//@ts-ignore
+router.get("/verify", asyncHandler(verify));
 
 export default router;
