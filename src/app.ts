@@ -25,6 +25,17 @@ app.get("/api/health", (req, res) => {
 });
 app.use(errorHandler);
 // Connect to MongoDB
+const corsOptions = {
+  origin: [
+    "https://relate15.vercel.app",
+    "http://localhost:3000", // Mantieni localhost per sviluppo
+  ],
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
 mongoose
   .connect(process.env.MONGODB_URI || "", {
     // @ts-ignore
