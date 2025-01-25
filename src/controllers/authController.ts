@@ -100,6 +100,43 @@ export const login = async (req: Request, res: Response) => {
   }
 };
 
+export const authenticate = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader?.startsWith("Bearer ")) {
+    return res.status(401).json({ message: "Authentication required" });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
+    const user = await User.findById(decoded.userId);
+
+    if (!user) {
+      return res.status(401).json({ message: "Invalid session" });
+    }
+
+    req.userId = user._id.toString();
+
+    // Token refresh logic
+    const payload = jwt.decode(token) as { exp?: number };
+    if (payload.exp && payload.exp - Date.now() / 1000 < REFRESH_WINDOW) {
+      const newToken = generateToken(user);
+      res.header("Authorization", `Bearer ${newToken}`);
+    }
+
+    next();
+  } catch (error) {
+    logger.error("Authentication failed", { error });
+    return res.status(401).json({ message: "Invalid or expired token" });
+  }
+};
+
 export const verify = async (req: Request, res: Response) => {
   const authHeader = req.headers.authorization;
 
