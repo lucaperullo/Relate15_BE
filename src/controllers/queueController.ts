@@ -1,7 +1,10 @@
+// src/controllers/queueController.ts
 import { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import Queue from "../models/Queue";
 import User, { IUser } from "../models/User";
+import Notification from "../models/Notifications";
+import { io } from "../ws";
 
 // Matchmaking configuration
 const MAX_RETRIES = 3; // Maximum attempts to find a unique match
@@ -26,7 +29,9 @@ export const bookCall = async (
     }
 
     // Check if the user is already in the queue
-    const existingQueueEntry = await Queue.findOne({ user: userId });
+    const existingQueueEntry = await Queue.findOne({ user: userId }).session(
+      session
+    );
     if (existingQueueEntry) {
       res.status(400).json({
         message: "You're already in the queue",
@@ -55,15 +60,16 @@ export const bookCall = async (
           user: {
             $nin: [
               userId,
-              ...currentUser.matches,
-              ...(currentUser.matchCount?.keys() || []),
+              ...currentUser.matches.map((id) => id.toString()),
+              ...(currentUser.matchCount
+                ? Array.from(currentUser.matchCount.keys())
+                : []),
             ],
           },
         },
         {
           status: "matched",
           matchedWith: userId,
-          $setOnInsert: { user: userId },
         },
         {
           new: true,
@@ -76,23 +82,27 @@ export const bookCall = async (
         const waitingUser = waitingQueueEntry.user as IUser;
 
         // Update both users' match history
-        await User.findByIdAndUpdate(
-          userId,
-          {
-            $addToSet: { matches: waitingUser._id }, // Add to matches array
-            $inc: { [`matchCount.${waitingUser._id}`]: 1 }, // Increment match count
-          },
-          { session }
-        );
+        currentUser.matches.push(waitingUser._id as mongoose.Types.ObjectId);
+        if (currentUser.matchCount) {
+          const currentCount =
+            currentUser.matchCount.get(waitingUser._id.toString()) || 0;
+          currentUser.matchCount.set(
+            waitingUser._id.toString(),
+            currentCount + 1
+          );
+        }
+        await currentUser.save({ session });
 
-        await User.findByIdAndUpdate(
-          waitingUser._id,
-          {
-            $addToSet: { matches: userId }, // Add to matches array
-            $inc: { [`matchCount.${userId}`]: 1 }, // Increment match count
-          },
-          { session }
-        );
+        currentUser.matches.push(waitingUser._id as mongoose.Types.ObjectId);
+        if (waitingUser.matchCount) {
+          const waitingCount =
+            waitingUser.matchCount.get(currentUser._id.toString()) || 0;
+          waitingUser.matchCount.set(
+            currentUser._id.toString(),
+            waitingCount + 1
+          );
+        }
+        await waitingUser.save({ session });
 
         // Create a queue entry for the current user
         const currentUserQueue = new Queue({
@@ -104,6 +114,31 @@ export const bookCall = async (
         await currentUserQueue.save({ session });
         await session.commitTransaction();
         foundMatch = true;
+
+        // Emit Socket.IO notifications to both users
+        // Notification to current user
+        const notificationForCurrentUser = new Notification({
+          user: currentUser._id,
+          message: `You've been matched with ${waitingUser.name}!`,
+          type: "new_match",
+        });
+        await notificationForCurrentUser.save({ session });
+        io.to(currentUser._id.toString()).emit(
+          "notification",
+          notificationForCurrentUser
+        );
+
+        // Notification to matched user
+        const notificationForMatchedUser = new Notification({
+          user: waitingUser._id,
+          message: `You've been matched with ${currentUser.name}!`,
+          type: "new_match",
+        });
+        await notificationForMatchedUser.save({ session });
+        io.to(waitingUser._id.toString()).emit(
+          "notification",
+          notificationForMatchedUser
+        );
 
         res.status(200).json({
           message: "Match found!",
@@ -139,6 +174,7 @@ export const bookCall = async (
     });
   } catch (error) {
     await session.abortTransaction();
+    console.error("Error booking call:", error);
     next(error);
   } finally {
     session.endSession();
@@ -164,7 +200,7 @@ export const getQueueStatus = async (
     // Find the user's queue entry
     const queueEntry = await Queue.findOne({ user: userId }).populate({
       path: "matchedWith",
-      select: "-password",
+      select: "-password -__v",
     });
 
     if (!queueEntry) {
@@ -177,6 +213,7 @@ export const getQueueStatus = async (
       matchedWith: queueEntry.matchedWith || undefined,
     });
   } catch (error) {
+    console.error("Error fetching queue status:", error);
     next(error);
   }
 };
@@ -213,6 +250,7 @@ export const resetMatches = async (
     res.status(200).json({ message: "Match history reset successfully" });
   } catch (error) {
     await session.abortTransaction();
+    console.error("Error resetting matches:", error);
     next(error);
   } finally {
     session.endSession();
@@ -236,7 +274,10 @@ export const getMatchHistory = async (
     }
 
     // Find the user and populate the matches
-    const user = await User.findById(userId).populate("matches", "-password");
+    const user = await User.findById(userId).populate(
+      "matches",
+      "-password -__v"
+    );
 
     if (!user) {
       res.status(404).json({ message: "User not found" });
@@ -245,6 +286,7 @@ export const getMatchHistory = async (
 
     res.status(200).json(user.matches);
   } catch (error) {
+    console.error("Error fetching match history:", error);
     next(error);
   }
 };
@@ -265,23 +307,23 @@ export const getCurrentMatch = async (
       return;
     }
 
-    // Find the user and get the last match
-    const user = await User.findById(userId).populate("matches", "-password");
+    // Find the user's queue entry with status "matched"
+    const queueEntry = await Queue.findOne({
+      user: userId,
+      status: "matched",
+    }).populate({
+      path: "matchedWith",
+      select: "-password -__v",
+    });
 
-    if (!user) {
-      res.status(404).json({ message: "User not found" });
-      return;
-    }
-
-    const currentMatch = user.matches[user.matches.length - 1]; // Assuming the last match is the current one
-
-    if (!currentMatch) {
+    if (!queueEntry || !queueEntry.matchedWith) {
       res.status(404).json({ message: "No current match found" });
       return;
     }
 
-    res.status(200).json(currentMatch);
+    res.status(200).json(queueEntry.matchedWith);
   } catch (error) {
+    console.error("Error fetching current match:", error);
     next(error);
   }
 };
@@ -312,10 +354,14 @@ export const getMatchCounts = async (
 
     res.status(200).json(user.matchCount);
   } catch (error) {
+    console.error("Error fetching match counts:", error);
     next(error);
   }
 };
 
+/**
+ * Confirm participation in a match.
+ */
 export const confirmParticipation = async (
   req: Request,
   res: Response,
@@ -332,17 +378,36 @@ export const confirmParticipation = async (
     }
 
     // Find the user's queue entry
-    const queueEntry = await Queue.findOne({ user: userId }).session(session);
-    if (!queueEntry || queueEntry.status !== "matched") {
+    const queueEntry = await Queue.findOne({
+      user: userId,
+      status: "matched",
+    }).session(session);
+    if (!queueEntry || !queueEntry.matchedWith) {
       res.status(400).json({ message: "No active match to confirm" });
       return;
     }
 
-    // Reset the queue state for the user
-    await Queue.deleteOne({ user: userId }).session(session);
+    const matchedUserId = queueEntry.matchedWith.toString();
 
-    // Update the user's queue status in the context (if needed)
-    // This can be done via the frontend by refetching the queue status.
+    // Optionally, perform additional actions like initiating a chat or event
+
+    // Remove the queue entry as the match is confirmed
+    await Queue.deleteOne({ user: userId, status: "matched" }).session(session);
+
+    // Optionally, notify the matched user that the user has confirmed participation
+    const matchedUser = await User.findById(matchedUserId).session(session);
+    if (matchedUser) {
+      const confirmationNotification = new Notification({
+        user: matchedUser._id,
+        message: `${req.user?.name} has confirmed the match.`,
+        type: "match_confirmation",
+      });
+      await confirmationNotification.save({ session });
+      io.to(matchedUser._id.toString()).emit(
+        "notification",
+        confirmationNotification
+      );
+    }
 
     await session.commitTransaction();
 
@@ -352,6 +417,7 @@ export const confirmParticipation = async (
     });
   } catch (error) {
     await session.abortTransaction();
+    console.error("Error confirming participation:", error);
     next(error);
   } finally {
     session.endSession();

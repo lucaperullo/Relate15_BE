@@ -1,5 +1,6 @@
 // src/types/express/index.d.ts
 import { IUser } from "../../models/User";
+import { IUserPayload } from "../../models/User"; // Adjust the path as necessary
 
 declare global {
   namespace Express {
@@ -8,8 +9,4 @@ declare global {
     }
   }
 }
-
-export interface IUserPayload {
-  id: string;
-  email: string;
-}
+// src/types/express/index.d.ts

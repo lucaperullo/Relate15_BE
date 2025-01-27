@@ -1,9 +1,11 @@
+// src/routes/queueRoutes.ts
 import express from "express";
 import { authenticate } from "../middleware/authenticate";
 import { asyncHandler } from "../utils/asyncHandler";
 import {
   bookCall,
   getQueueStatus,
+  resetMatches,
   getMatchHistory,
   getCurrentMatch,
   getMatchCounts,
@@ -16,7 +18,7 @@ const router = express.Router();
  * @swagger
  * tags:
  *   name: Queue
- *   description: Team member matching queue management
+ *   description: Matchmaking and queue management
  */
 
 /**
@@ -24,23 +26,32 @@ const router = express.Router();
  * /api/queue/book:
  *   post:
  *     tags: [Queue]
- *     summary: Join the matching queue
- *     description: Book a 15-minute call with a random team member
+ *     summary: Book a call and find a match
+ *     description: Add the authenticated user to the matchmaking queue and find a compatible match.
  *     security:
  *       - cookieAuth: []
  *     responses:
  *       200:
- *         description: Successfully joined queue or matched
+ *         description: Match found or added to queue
  *         content:
  *           application/json:
  *             schema:
- *               oneOf:
- *                 - $ref: '#/components/schemas/QueueMatch'
- *                 - $ref: '#/components/schemas/QueueWaiting'
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 state:
+ *                   type: string
+ *                 matchedUser:
+ *                   $ref: '#/components/schemas/User'
+ *       400:
+ *         description: User already in queue or invalid request
  *       401:
  *         $ref: '#/components/responses/Unauthorized'
- *       400:
- *         $ref: '#/components/responses/BadRequest'
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Internal server error
  */
 router.post("/book", authenticate, asyncHandler(bookCall));
 
@@ -50,7 +61,7 @@ router.post("/book", authenticate, asyncHandler(bookCall));
  *   get:
  *     tags: [Queue]
  *     summary: Get current queue status
- *     description: Check user's current position in the matching queue
+ *     description: Retrieve the current queue status and matched user (if any) for the authenticated user.
  *     security:
  *       - cookieAuth: []
  *     responses:
@@ -59,21 +70,54 @@ router.post("/book", authenticate, asyncHandler(bookCall));
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/QueueStatus'
+ *               type: object
+ *               properties:
+ *                 state:
+ *                   type: string
+ *                 matchedWith:
+ *                   $ref: '#/components/schemas/User'
  *       401:
  *         $ref: '#/components/responses/Unauthorized'
  *       404:
- *         description: No queue entry found
+ *         description: No active queue session
+ *       500:
+ *         description: Internal server error
  */
 router.get("/status", authenticate, asyncHandler(getQueueStatus));
 
 /**
  * @swagger
- * /api/queue/match-history:
+ * /api/queue/reset:
+ *   post:
+ *     tags: [Queue]
+ *     summary: Reset match history
+ *     description: Reset the authenticated user's match history.
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Match history reset successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       500:
+ *         description: Internal server error
+ */
+router.post("/reset", authenticate, asyncHandler(resetMatches));
+
+/**
+ * @swagger
+ * /api/queue/history:
  *   get:
  *     tags: [Queue]
  *     summary: Get match history
- *     description: Retrieve the user's match history
+ *     description: Retrieve the authenticated user's match history.
  *     security:
  *       - cookieAuth: []
  *     responses:
@@ -89,21 +133,23 @@ router.get("/status", authenticate, asyncHandler(getQueueStatus));
  *         $ref: '#/components/responses/Unauthorized'
  *       404:
  *         description: User not found
+ *       500:
+ *         description: Internal server error
  */
-router.get("/match-history", authenticate, asyncHandler(getMatchHistory));
+router.get("/history", authenticate, asyncHandler(getMatchHistory));
 
 /**
  * @swagger
- * /api/queue/current-match:
+ * /api/queue/current:
  *   get:
  *     tags: [Queue]
  *     summary: Get current match
- *     description: Retrieve the user's current match (most recent match)
+ *     description: Retrieve the authenticated user's current match.
  *     security:
  *       - cookieAuth: []
  *     responses:
  *       200:
- *         description: Current match details
+ *         description: Current matched user
  *         content:
  *           application/json:
  *             schema:
@@ -112,8 +158,10 @@ router.get("/match-history", authenticate, asyncHandler(getMatchHistory));
  *         $ref: '#/components/responses/Unauthorized'
  *       404:
  *         description: No current match found
+ *       500:
+ *         description: Internal server error
  */
-router.get("/current-match", authenticate, asyncHandler(getCurrentMatch));
+router.get("/current", authenticate, asyncHandler(getCurrentMatch));
 
 /**
  * @swagger
@@ -121,12 +169,12 @@ router.get("/current-match", authenticate, asyncHandler(getCurrentMatch));
  *   get:
  *     tags: [Queue]
  *     summary: Get match counts
- *     description: Retrieve the number of times the user has matched with others
+ *     description: Retrieve the number of times the authenticated user has matched with each user.
  *     security:
  *       - cookieAuth: []
  *     responses:
  *       200:
- *         description: Match counts with other users
+ *         description: Match counts
  *         content:
  *           application/json:
  *             schema:
@@ -137,6 +185,8 @@ router.get("/current-match", authenticate, asyncHandler(getCurrentMatch));
  *         $ref: '#/components/responses/Unauthorized'
  *       404:
  *         description: User not found
+ *       500:
+ *         description: Internal server error
  */
 router.get("/match-counts", authenticate, asyncHandler(getMatchCounts));
 
@@ -146,12 +196,12 @@ router.get("/match-counts", authenticate, asyncHandler(getMatchCounts));
  *   post:
  *     tags: [Queue]
  *     summary: Confirm participation in a match
- *     description: Confirm participation and reset the queue state to allow joining again.
+ *     description: Confirm your participation in an active match.
  *     security:
  *       - cookieAuth: []
  *     responses:
  *       200:
- *         description: Participation confirmed and queue state reset.
+ *         description: Participation confirmed successfully
  *         content:
  *           application/json:
  *             schema:
@@ -161,10 +211,12 @@ router.get("/match-counts", authenticate, asyncHandler(getMatchCounts));
  *                   type: string
  *                 state:
  *                   type: string
+ *       400:
+ *         description: No active match to confirm or other bad request
  *       401:
  *         $ref: '#/components/responses/Unauthorized'
- *       400:
- *         description: No active match to confirm.
+ *       500:
+ *         description: Internal server error
  */
 router.post("/confirm", authenticate, asyncHandler(confirmParticipation));
 

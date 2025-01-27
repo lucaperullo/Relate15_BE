@@ -1,6 +1,8 @@
 import express from "express";
+import rateLimit from "express-rate-limit";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
+import http from "http";
 import cors from "cors";
 import helmet from "helmet";
 import authRoutes from "./routes/authRoutes";
@@ -8,6 +10,9 @@ import queueRoutes from "./routes/queueRoutes";
 import errorHandler from "./middleware/errorHandler";
 import expressListEndpoints from "express-list-endpoints";
 import calendarRoutes from "./routes/calendarRoutes";
+import chatRoutes from "./routes/chatRoutes";
+import notificationRoutes from "./routes/notificationRoutes";
+import { initializeWebSocket } from "./ws";
 
 dotenv.config();
 const app = express();
@@ -27,15 +32,19 @@ app.use(
 
 // 3. CORS configuration
 const corsOptions = {
-  origin: ["https://relate15.vercel.app", "http://localhost:3000"],
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  exposedHeaders: ["Authorization"],
+  origin: ["http://localhost:3000", "https://relate15.vercel.app"],
+  methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
   credentials: true,
-  maxAge: 600,
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
 };
 app.use(cors(corsOptions));
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: "Too many requests from this IP, please try again later.",
+});
 
+// app.use(limiter);
 // 4. Body parsers
 app.use(express.json());
 
@@ -43,7 +52,8 @@ app.use(express.json());
 app.use("/api/auth", authRoutes);
 app.use("/api/queue", queueRoutes);
 app.use("/api/calendar", calendarRoutes);
-
+app.use("/api/chat", chatRoutes);
+app.use("/api/notifications", notificationRoutes);
 // Health check
 app.get("/api/health", (req, res) => {
   res.status(200).json({ status: "OK" });
@@ -65,5 +75,7 @@ const connectDB = async () => {
 };
 
 connectDB();
-
+// Create HTTP server and initialize WebSocket
+const server = http.createServer(app);
+initializeWebSocket(server);
 export default app;

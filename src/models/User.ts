@@ -1,6 +1,11 @@
 // src/models/User.ts
 import mongoose, { Document, Schema } from "mongoose";
-
+export interface IUserPayload {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+}
 export interface IUser extends Document {
   email: string;
   password: string;
