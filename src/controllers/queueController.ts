@@ -28,150 +28,78 @@ export const bookCall = async (
       return;
     }
 
-    // Check if the user is already in the queue
-    const existingQueueEntry = await Queue.findOne({ user: userId }).session(
-      session
-    );
-    if (existingQueueEntry) {
-      res.status(400).json({
-        message: "You're already in the queue",
-        state: existingQueueEntry.status,
-        matchedWith: existingQueueEntry.matchedWith,
-      });
-      return;
-    }
-
-    // Find the current user
     const currentUser = await User.findById(userId).session(session);
     if (!currentUser) {
       res.status(404).json({ message: "User not found" });
       return;
     }
 
-    // Find a compatible match (not in matches array and not recently matched)
-    let retries = 0;
     let foundMatch = false;
+    let retries = 0;
 
     while (retries < MAX_RETRIES && !foundMatch) {
-      // Find the oldest waiting user who hasn't been matched before
       const waitingQueueEntry = await Queue.findOneAndUpdate(
         {
           status: "waiting",
           user: {
-            $nin: [
-              userId,
-              ...currentUser.matches.map((id) => id.toString()),
-              ...(currentUser.matchCount
-                ? Array.from(currentUser.matchCount.keys())
-                : []),
-            ],
+            $nin: [userId, ...currentUser.matches.map((id) => id.toString())],
           },
         },
-        {
-          status: "matched",
-          matchedWith: userId,
-        },
-        {
-          new: true,
-          sort: { createdAt: 1 }, // FIFO (First In, First Out)
-          session,
-        }
+        { status: "matched", matchedWith: userId },
+        { new: true, sort: { createdAt: 1 }, session }
       ).populate("user");
 
       if (waitingQueueEntry?.user) {
-        const waitingUser = waitingQueueEntry.user as IUser;
+        const matchedUser = waitingQueueEntry.user as IUser;
 
-        // Update both users' match history
-        currentUser.matches.push(waitingUser._id as mongoose.Types.ObjectId);
-        if (currentUser.matchCount) {
-          const currentCount =
-            currentUser.matchCount.get(waitingUser._id.toString()) || 0;
-          currentUser.matchCount.set(
-            waitingUser._id.toString(),
-            currentCount + 1
-          );
-        }
-        await currentUser.save({ session });
+        // Ensure both users have each other in their matches array
+        await User.findByIdAndUpdate(
+          currentUser._id,
+          {
+            $addToSet: { matches: matchedUser._id },
+          },
+          { session }
+        );
 
-        currentUser.matches.push(waitingUser._id as mongoose.Types.ObjectId);
-        if (waitingUser.matchCount) {
-          const waitingCount =
-            waitingUser.matchCount.get(currentUser._id.toString()) || 0;
-          waitingUser.matchCount.set(
-            currentUser._id.toString(),
-            waitingCount + 1
-          );
-        }
-        await waitingUser.save({ session });
+        await User.findByIdAndUpdate(
+          matchedUser._id,
+          {
+            $addToSet: { matches: currentUser._id },
+          },
+          { session }
+        );
 
-        // Create a queue entry for the current user
-        const currentUserQueue = new Queue({
-          user: userId,
-          status: "matched",
-          matchedWith: waitingUser._id,
-        });
+        // Create queue entries for both users
+        await Queue.create(
+          [{ user: userId, status: "matched", matchedWith: matchedUser._id }],
+          { session }
+        );
+        await Queue.create(
+          [{ user: matchedUser._id, status: "matched", matchedWith: userId }],
+          { session }
+        );
 
-        await currentUserQueue.save({ session });
         await session.commitTransaction();
         foundMatch = true;
 
-        // Emit Socket.IO notifications to both users
-        // Notification to current user
-        const notificationForCurrentUser = new Notification({
-          user: currentUser._id,
-          message: `You've been matched with ${waitingUser.name}!`,
-          type: "new_match",
-        });
-        await notificationForCurrentUser.save({ session });
-        io.to(currentUser._id.toString()).emit(
-          "notification",
-          notificationForCurrentUser
-        );
-
-        // Notification to matched user
-        const notificationForMatchedUser = new Notification({
-          user: waitingUser._id,
-          message: `You've been matched with ${currentUser.name}!`,
-          type: "new_match",
-        });
-        await notificationForMatchedUser.save({ session });
-        io.to(waitingUser._id.toString()).emit(
-          "notification",
-          notificationForMatchedUser
-        );
-
-        res.status(200).json({
-          message: "Match found!",
-          state: "matched",
-          matchedUser: {
-            id: waitingUser._id,
-            name: waitingUser.name,
-            email: waitingUser.email,
-            role: waitingUser.role,
-            profilePictureUrl: waitingUser.profilePictureUrl,
-            matchCount:
-              currentUser.matchCount?.get(waitingUser._id.toString()) || 0,
-          },
-        });
-        return; // Ensure we exit the function after sending the response
+        res
+          .status(200)
+          .json({
+            message: "Match found!",
+            state: "matched",
+            matchedUser: matchedUser,
+          });
+        return;
       }
 
       retries++;
     }
 
-    // If no match is found after retries, add the user to the queue
-    const queueEntry = new Queue({
-      user: userId,
-      status: "waiting",
-    });
-
+    const queueEntry = new Queue({ user: userId, status: "waiting" });
     await queueEntry.save({ session });
     await session.commitTransaction();
 
-    res.status(200).json({
-      message: "Added to queue",
-      state: "waiting",
-    });
+    res.status(200).json({ message: "Added to queue", state: "waiting" });
   } catch (error) {
     await session.abortTransaction();
     console.error("Error booking call:", error);
