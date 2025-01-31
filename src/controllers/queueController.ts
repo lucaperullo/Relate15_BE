@@ -298,7 +298,7 @@ export const getCurrentMatch = async (
   req: Request,
   res: Response,
   next: NextFunction
-): Promise<void> => {
+) => {
   try {
     const userId = req.user?.id;
 
@@ -307,16 +307,22 @@ export const getCurrentMatch = async (
       return;
     }
 
-    // Find the user's queue entry with status "matched"
-    const queueEntry = await Queue.findOne({
+    // Cerca prima nella Queue
+    let queueEntry = await Queue.findOne({
       user: userId,
       status: "matched",
-    }).populate({
-      path: "matchedWith",
-      select: "-password -__v",
-    });
+    }).populate({ path: "matchedWith", select: "-password -__v" });
 
+    // Se non trova nulla, cerca direttamente in User.matches
     if (!queueEntry || !queueEntry.matchedWith) {
+      const user = await User.findById(userId).populate(
+        "matches",
+        "-password -__v"
+      );
+      if (user?.matches?.length > 0) {
+        res.status(200).json(user.matches);
+        return;
+      }
       res.status(404).json({ message: "No current match found" });
       return;
     }
