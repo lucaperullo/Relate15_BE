@@ -38,6 +38,7 @@ const corsOptions = {
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
 };
 app.use(cors(corsOptions));
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // Limit each IP to 100 requests per windowMs
@@ -45,6 +46,7 @@ const limiter = rateLimit({
 });
 
 // app.use(limiter);
+
 // 4. Body parsers
 app.use(express.json());
 
@@ -54,6 +56,7 @@ app.use("/api/queue", queueRoutes);
 app.use("/api/calendar", calendarRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/notifications", notificationRoutes);
+
 // Health check
 app.get("/api/health", (req, res) => {
   res.status(200).json({ status: "OK" });
@@ -75,7 +78,7 @@ const connectDB = async () => {
 };
 
 connectDB();
-// Create HTTP server and initialize WebSocket
+
 const server = http.createServer(app);
-initializeWebSocket(server);
-export default app;
+
+export { app, server };

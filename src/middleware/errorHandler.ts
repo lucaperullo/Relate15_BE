@@ -33,7 +33,7 @@ const errorHandler = (
     method,
     statusCode,
     //@ts-ignore
-    user: req.user?._id || "anonymous",
+    user: req.user?.id || "anonymous",
     body: process.env.NODE_ENV === "development" ? req.body : undefined,
     query: process.env.NODE_ENV === "development" ? req.query : undefined,
     headers: {

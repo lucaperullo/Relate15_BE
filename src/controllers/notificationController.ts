@@ -32,7 +32,7 @@ export const markNotificationsAsRead = async (
     if (!userId) throw new Error("Authentication required");
 
     const notification = await Notifications.findOneAndUpdate(
-      { _id: notificationId, user: userId },
+      { id: notificationId, user: userId },
       { read: true },
       { new: true }
     );

@@ -4,6 +4,7 @@ import { hashPassword, comparePasswords, generateToken } from "../utils/auth";
 import logger from "../utils/logger";
 import jwt from "jsonwebtoken";
 import cloudinary from "../utils/cloudinary";
+import mongoose from "mongoose";
 
 declare module "express" {
   interface Request {
@@ -28,7 +29,6 @@ export const register = async (req: Request, res: Response) => {
     // Handle file upload
     let profilePictureUrl = "";
     if (req.file) {
-      // Upload to Cloudinary using existing configuration
       const result = await cloudinary.uploader.upload(req.file.path, {
         folder: "relate15/profile_pictures",
         transformation: { width: 500, height: 500, crop: "limit" },
@@ -36,7 +36,7 @@ export const register = async (req: Request, res: Response) => {
       profilePictureUrl = result.secure_url;
     }
 
-    // Create new user with Cloudinary URL
+    // Create new user
     const hashedPassword = await hashPassword(password);
     const newUser = new User({
       email,
@@ -45,18 +45,19 @@ export const register = async (req: Request, res: Response) => {
       role: role || "user",
       interests: interests?.split(",").map((i: string) => i.trim()) || [],
       bio,
-      profilePictureUrl, // Use Cloudinary URL
+      profilePictureUrl,
     });
 
     await newUser.save();
 
-    // Generate token and respond
+    // Generate token
     const token = generateToken(newUser);
     return res.status(201).json({
       message: "User registered successfully.",
       token,
+      expiresIn: TOKEN_EXPIRATION,
       user: {
-        id: newUser._id,
+        id: newUser.id,
         email: newUser.email,
         name: newUser.name,
         role: newUser.role,
@@ -65,10 +66,9 @@ export const register = async (req: Request, res: Response) => {
     });
   } catch (error) {
     logger.error("Registration failed", { error });
-    return res.status(500).json({
-      message: "Server error during registration",
-      ...(process.env.NODE_ENV === "development" && { error }),
-    });
+    return res
+      .status(500)
+      .json({ message: "Server error during registration" });
   }
 };
 
@@ -86,8 +86,9 @@ export const login = async (req: Request, res: Response) => {
     return res.status(200).json({
       message: "Logged in successfully.",
       token,
+      expiresIn: TOKEN_EXPIRATION,
       user: {
-        id: user._id,
+        id: user.id,
         email: user.email,
         name: user.name,
         role: user.role,
@@ -100,72 +101,59 @@ export const login = async (req: Request, res: Response) => {
   }
 };
 
-export const authenticate = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader?.startsWith("Bearer ")) {
-    return res.status(401).json({ message: "Authentication required" });
-  }
-
-  const token = authHeader.split(" ")[1];
-
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
-    const user = await User.findById(decoded.userId);
-
-    if (!user) {
-      return res.status(401).json({ message: "Invalid session" });
-    }
-
-    req.userId = user._id.toString();
-
-    // Token refresh logic
-    const payload = jwt.decode(token) as { exp?: number };
-    if (payload.exp && payload.exp - Date.now() / 1000 < REFRESH_WINDOW) {
-      const newToken = generateToken(user);
-      res.header("Authorization", `Bearer ${newToken}`);
-    }
-
-    next();
-  } catch (error) {
-    logger.error("Authentication failed", { error });
-    return res.status(401).json({ message: "Invalid or expired token" });
-  }
-};
-
 export const verify = async (req: Request, res: Response) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader?.startsWith("Bearer ")) {
+    console.warn("❌ Authentication header missing or malformed.");
     return res.status(401).json({ message: "Authentication required" });
   }
 
   const token = authHeader.split(" ")[1];
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
-    const user = await User.findById(decoded.userId).select("-password");
+    console.log("🔍 Verifying token:", token);
+    const decoded = jwt.verify(token, JWT_SECRET) as {
+      id: string;
+      exp: number;
+    };
+
+    console.log("✅ Token decoded:", decoded);
+
+    // ✅ FIX: Use `id` instead of `userId`
+    if (!decoded.id) {
+      console.error("❌ Invalid user ID format:", decoded.id);
+      return res.status(401).json({ message: "Invalid token format" });
+    }
+
+    // ✅ Ensure ID is valid
+    if (!mongoose.Types.ObjectId.isValid(decoded.id)) {
+      console.error("❌ Malformed MongoDB ObjectId:", decoded.id);
+      return res.status(401).json({ message: "Invalid user ID format" });
+    }
+
+    const user = await User.findById(decoded.id).select("-password");
+
+    console.log("🔍 Database lookup result:", user);
 
     if (!user) {
+      console.error("❌ User not found for ID:", decoded.id);
       return res.status(401).json({ message: "Invalid session" });
     }
 
     return res.status(200).json({
       message: "Session verified",
       user: {
-        id: user._id,
+        id: user.id,
         email: user.email,
         name: user.name,
         role: user.role,
         profilePictureUrl: user.profilePictureUrl,
       },
+      expiresIn: decoded.exp - Math.floor(Date.now() / 1000),
     });
   } catch (error) {
-    logger.error("Session verification failed", { error });
+    console.error("❌ Token verification error:", error);
     return res.status(401).json({ message: "Invalid or expired token" });
   }
 };

@@ -20,6 +20,6 @@ export const comparePasswords = async (
 };
 
 export const generateToken = (user: IUser): string => {
-  const payload = { id: user._id, email: user.email };
+  const payload = { id: user.id, email: user.email };
   return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
 };

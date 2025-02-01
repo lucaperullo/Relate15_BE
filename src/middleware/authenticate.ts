@@ -50,7 +50,7 @@ export const authenticate = async (
 
     // Attach user to request with all required properties
     req.user = {
-      id: user._id.toString(),
+      id: user.id.toString(),
       name: user.name,
       email: user.email,
       role: user.role,
@@ -85,7 +85,7 @@ export const authenticateSocket = async (
 
     // Attach user to socket data with all required properties
     socket.data.user = {
-      id: user._id.toString(),
+      id: user.id.toString(),
       name: user.name,
       email: user.email,
       role: user.role,

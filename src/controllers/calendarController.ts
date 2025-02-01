@@ -193,7 +193,7 @@ export const updateEvent = async (
     const { scheduledTime } = req.body;
 
     const event = await CalendarEvent.findOne({
-      _id: eventId,
+      id: eventId,
       organizer: user.id,
     }).session(session);
 
@@ -248,7 +248,7 @@ export const cancelEvent = async (
 
     const { eventId } = req.params;
     const event = await CalendarEvent.findOneAndDelete({
-      _id: eventId,
+      id: eventId,
       organizer: user.id,
     }).session(session);
 
