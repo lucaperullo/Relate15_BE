@@ -3,56 +3,6 @@ import mongoose from "mongoose";
 import Chat from "../models/ChatMessage";
 
 /**
- * Get all chat messages between the authenticated user and a specific receiver.
- */
-export const getChatHistory = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> => {
-  try {
-    const { receiverId } = req.params;
-    const userId = req.user?.id;
-
-    if (!userId) {
-      res.status(401).json({ message: "Authentication required" });
-      return;
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(receiverId)) {
-      res.status(400).json({ message: "Invalid receiver ID format" });
-      return;
-    }
-
-    const chat = await Chat.findOne({
-      participants: { $all: [userId, receiverId] },
-    })
-      .populate("messages.sender", "name profilePictureUrl")
-      .lean();
-
-    if (!chat) {
-      res.status(200).json([]);
-      return;
-    }
-
-    // ✅ Ensure all messages have `id`
-    const formattedMessages = chat.messages.map((msg: any) => ({
-      ...msg,
-      id: msg._id.toString(),
-      sender: {
-        ...msg.sender,
-        id: msg.sender._id.toString(),
-      },
-    }));
-
-    res.status(200).json(formattedMessages);
-  } catch (error) {
-    console.error("Error fetching chat history:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
-
-/**
  * Send a message between matched users.
  */
 export const sendMessage = async (

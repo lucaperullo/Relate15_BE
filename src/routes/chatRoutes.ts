@@ -3,7 +3,6 @@ import express, { Request, Response, NextFunction } from "express";
 import { authenticate } from "../middleware/authenticate";
 import { asyncHandler } from "../utils/asyncHandler";
 import {
-  getChatHistory,
   markChatMessagesAsRead,
   sendMessage,
 } from "../controllers/chatController";
@@ -18,61 +17,6 @@ const router = express.Router();
  *   name: Chat
  *   description: Chat management and messaging
  */
-
-/**
- * @swagger
- * /api/chat/history/{receiverId}:
- *   get:
- *     tags: [Chat]
- *     summary: Get chat history with a specific user
- *     description: Retrieve the chat history between the authenticated user and another user.
- *     security:
- *       - cookieAuth: []
- *     parameters:
- *       - in: path
- *         name: receiverId
- *         required: true
- *         schema:
- *           type: string
- *         description: The ID of the receiver user
- *     responses:
- *       200:
- *         description: List of chat messages
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/ChatMessage'
- *       400:
- *         description: Invalid receiver ID format
- *       401:
- *         $ref: '#/components/responses/Unauthorized'
- *       403:
- *         description: User is not in your matches
- *       404:
- *         description: User not found
- *       500:
- *         description: Internal server error
- */
-router.get(
-  "/history/:receiverId",
-  authenticate,
-  [
-    param("receiverId")
-      .custom((value) => mongoose.Types.ObjectId.isValid(value))
-      .withMessage("Invalid receiver ID format"),
-  ],
-  (req: Request, res: Response, next: NextFunction) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      res.status(400).json({ errors: errors.array() });
-      return;
-    }
-    next();
-  },
-  asyncHandler(getChatHistory)
-);
 
 /**
  * @swagger
