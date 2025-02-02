@@ -1,23 +1,22 @@
-import mongoose, { Document, Schema } from "mongoose";
-import { IUser } from "./User";
+import mongoose, { Schema, Document } from "mongoose";
 
 export interface IQueue extends Document {
-  user: IUser["id"];
-  status: "waiting" | "matched";
-  matchedWith?: IUser["id"];
-  createdAt: Date;
+  user: mongoose.Types.ObjectId;
+  status: "idle" | "waiting" | "matched";
+  matchedWith?: mongoose.Types.ObjectId;
+  appointment?: Date; // 🔥 New: Store appointment date if booked
 }
 
-const QueueSchema: Schema = new Schema<IQueue>(
+const QueueSchema = new Schema<IQueue>(
   {
-    user: {
-      type: Schema.Types.ObjectId,
-      ref: "User",
+    user: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    status: {
+      type: String,
+      enum: ["idle", "waiting", "matched"],
       required: true,
-      unique: true,
     },
-    status: { type: String, enum: ["waiting", "matched"], default: "waiting" },
     matchedWith: { type: Schema.Types.ObjectId, ref: "User" },
+    appointment: { type: Date }, // 🔥 Optional appointment date
   },
   { timestamps: true }
 );

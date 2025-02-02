@@ -231,20 +231,25 @@ export const initializeWebSocket = (server: http.Server) => {
             return;
           }
 
+          // Cast matchedWith to 'any' so we can access its properties.
+          const matchedWith = queueEntry.matchedWith as any;
+
           console.log(
             `🔵 User ${user.id} queue status: ${
               queueEntry.status
-            }, Matched With: ${queueEntry.matchedWith?.name || "None"}`
+            }, Matched With: ${matchedWith?.name || "None"}`
           );
 
           socket.emit("queueUpdated", {
             state: queueEntry.status,
-            matchedWith: queueEntry.matchedWith
+            matchedWith: matchedWith
               ? {
-                  id: queueEntry.matchedWith._id.toString(),
-                  name: queueEntry.matchedWith.name,
-                  email: queueEntry.matchedWith.email,
-                  profilePictureUrl: queueEntry.matchedWith.profilePictureUrl,
+                  id: matchedWith._id
+                    ? matchedWith._id.toString()
+                    : matchedWith.toString(),
+                  name: matchedWith.name,
+                  email: matchedWith.email,
+                  profilePictureUrl: matchedWith.profilePictureUrl,
                 }
               : undefined,
           });
@@ -253,6 +258,7 @@ export const initializeWebSocket = (server: http.Server) => {
           socket.emit("error", "Failed to fetch queue status");
         }
       });
+
       socket.on("disconnect", () => {
         console.log(`❌ User ${user.id} disconnected`);
       });

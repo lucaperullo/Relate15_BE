@@ -8,7 +8,9 @@ import {
   getMatchHistory,
   getCurrentMatch,
   getMatchCounts,
-  confirmParticipation,
+  confirmAppointment, // New: Confirm appointment endpoint
+  bookAppointment, // New: Book appointment endpoint
+  skipAppointment, // New: Skip appointment endpoint
 } from "../controllers/queueController";
 
 const router = express.Router();
@@ -161,16 +163,16 @@ router.get("/match-counts", authenticate, asyncHandler(getMatchCounts));
 
 /**
  * @swagger
- * /api/queue/confirm:
+ * /api/queue/book-appointment:
  *   post:
  *     tags: [Queue]
- *     summary: Confirm participation in a match
- *     description: Confirm your participation in an active match.
+ *     summary: Book an appointment
+ *     description: Book an appointment with the matched user and update the queue accordingly.
  *     security:
  *       - cookieAuth: []
  *     responses:
  *       200:
- *         description: Participation confirmed successfully
+ *         description: Appointment booked successfully
  *         content:
  *           application/json:
  *             schema:
@@ -181,12 +183,76 @@ router.get("/match-counts", authenticate, asyncHandler(getMatchCounts));
  *                 state:
  *                   type: string
  *       400:
- *         description: No active match to confirm or other bad request
+ *         description: No active match to book an appointment
  *       401:
  *         $ref: '#/components/responses/Unauthorized'
  *       500:
  *         description: Internal server error
  */
-router.post("/confirm", authenticate, asyncHandler(confirmParticipation));
+router.post("/book-appointment", authenticate, asyncHandler(bookAppointment));
+
+/**
+ * @swagger
+ * /api/queue/skip-appointment:
+ *   post:
+ *     tags: [Queue]
+ *     summary: Skip an appointment
+ *     description: Skip the appointment, resetting the user to idle and updating the matched user's queue status.
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Appointment skipped successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 state:
+ *                   type: string
+ *       400:
+ *         description: No active match to skip an appointment
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       500:
+ *         description: Internal server error
+ */
+router.post("/skip-appointment", authenticate, asyncHandler(skipAppointment));
+
+/**
+ * @swagger
+ * /api/queue/confirm-appointment:
+ *   post:
+ *     tags: [Queue]
+ *     summary: Confirm an appointment
+ *     description: Confirm an appointment with the matched user and remove both users from the queue.
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Appointment confirmed successfully and both users removed from the queue.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 state:
+ *                   type: string
+ *       400:
+ *         description: No active match to confirm an appointment
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       500:
+ *         description: Internal server error
+ */
+router.post(
+  "/confirm-appointment",
+  authenticate,
+  asyncHandler(confirmAppointment)
+);
 
 export default router;

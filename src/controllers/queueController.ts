@@ -6,272 +6,425 @@ import Notification from "../models/Notifications";
 import { io } from "../ws";
 
 const MAX_RETRIES = 3;
-const MATCH_COOLDOWN = 24 * 60 * 60 * 1000;
+
+/* ===========================
+   HELPER FUNCTIONS
+=========================== */
 
 /**
- * Book a call and find a match for the user.
+ * Extracts the user id from the request.
+ * If the user is not authenticated, sends a 401 response.
+ */
+function getUserId(req: Request, res: Response): string | null {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ message: "Authentication required" });
+    return null;
+  }
+  return userId;
+}
+
+/**
+ * Runs a callback inside a MongoDB transaction.
+ */
+async function runInTransaction<T>(
+  callback: (session: mongoose.ClientSession) => Promise<T>
+): Promise<T> {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    const result = await callback(session);
+    await session.commitTransaction();
+    return result;
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
+  }
+}
+
+/**
+ * Transforms a user document (changing _id to id and removing _id).
+ */
+function transformUser(user: any) {
+  const { _id, ...rest } = user;
+  return { id: _id.toString(), ...rest };
+}
+
+/* ===========================
+   ROUTE HANDLERS
+=========================== */
+
+/**
+ * Book a call and try to find a match.
  */
 export const bookCall = async (
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+  const userId = getUserId(req, res);
+  if (!userId) return;
 
   try {
-    const userId = req.user?.id;
-    if (!userId) {
-      res.status(401).json({ message: "Authentication required" });
-      return;
-    }
-
-    const currentUser = await User.findById(userId).session(session);
-    if (!currentUser) {
-      res.status(404).json({ message: "User not found" });
-      return;
-    }
-
-    let foundMatch = false;
-    let retries = 0;
-
-    while (retries < MAX_RETRIES && !foundMatch) {
-      const waitingQueueEntry = await Queue.findOneAndUpdate(
-        {
-          status: "waiting",
-          user: {
-            $nin: [userId, ...currentUser.matches.map((id) => id.toString())],
-          },
-        },
-        { status: "matched", matchedWith: userId },
-        { new: true, sort: { createdAt: 1 }, session }
-      ).populate("user");
-
-      if (waitingQueueEntry?.user) {
-        const matchedUser = waitingQueueEntry.user as IUser;
-
-        await User.findByIdAndUpdate(
-          userId,
-          { $addToSet: { matches: matchedUser.id } },
-          { session }
-        );
-        await User.findByIdAndUpdate(
-          matchedUser.id,
-          { $addToSet: { matches: userId } },
-          { session }
-        );
-
-        await Queue.create(
-          [{ user: userId, status: "matched", matchedWith: matchedUser.id }],
-          { session }
-        );
-        await Queue.create(
-          [{ user: matchedUser.id, status: "matched", matchedWith: userId }],
-          { session }
-        );
-
-        await session.commitTransaction();
-        foundMatch = true;
-
-        // 🔥 Emit match event to both users
-        io.to(userId)
-          .to(matchedUser.id.toString())
-          .emit("matchFound", { matchedUser });
-
-        res
-          .status(200)
-          .json({ message: "Match found!", state: "matched", matchedUser });
-        return;
+    const result = await runInTransaction(async (session) => {
+      const currentUser = await User.findById(userId).session(session);
+      if (!currentUser) {
+        throw { status: 404, message: "User not found" };
       }
 
-      retries++;
+      let matchFound = false;
+      let matchedUser: IUser | null = null;
+      let retries = 0;
+
+      while (retries < MAX_RETRIES && !matchFound) {
+        const waitingQueueEntry = await Queue.findOneAndUpdate(
+          {
+            status: "waiting",
+            user: {
+              $nin: [
+                userId,
+                ...currentUser.matches.map((id: any) => id.toString()),
+              ],
+            },
+          },
+          { status: "matched", matchedWith: userId },
+          { new: true, sort: { createdAt: 1 }, session }
+        ).populate("user");
+
+        if (waitingQueueEntry?.user) {
+          // First cast to unknown then to IUser to satisfy TypeScript
+          matchedUser = waitingQueueEntry.user as unknown as IUser;
+
+          // Add each other to matches
+          await User.findByIdAndUpdate(
+            userId,
+            { $addToSet: { matches: matchedUser.id } },
+            { session }
+          );
+          await User.findByIdAndUpdate(
+            matchedUser.id,
+            { $addToSet: { matches: userId } },
+            { session }
+          );
+
+          // Create matched queue entries for both users
+          await Queue.create(
+            [{ user: userId, status: "matched", matchedWith: matchedUser.id }],
+            { session }
+          );
+          await Queue.create(
+            [{ user: matchedUser.id, status: "matched", matchedWith: userId }],
+            { session }
+          );
+
+          matchFound = true;
+        }
+        retries++;
+      }
+
+      if (matchFound && matchedUser) {
+        return { state: "matched", message: "Match found!", matchedUser };
+      }
+      // If no match, add user to the waiting queue
+      const queueEntry = new Queue({ user: userId, status: "waiting" });
+      await queueEntry.save({ session });
+      return { state: "waiting", message: "Added to queue" };
+    });
+
+    // Emit events after transaction completes
+    if (result.state === "matched" && result.matchedUser) {
+      io.to(userId)
+        .to(result.matchedUser.id.toString())
+        .emit("matchFound", { matchedUser: result.matchedUser });
+    } else {
+      io.to(userId).emit("queueUpdated", { state: "waiting" });
     }
-
-    const queueEntry = new Queue({ user: userId, status: "waiting" });
-    await queueEntry.save({ session });
-
-    await session.commitTransaction();
-
-    // 🔥 Emit queue update
-    io.to(userId).emit("queueUpdated", { state: "waiting" });
-
-    res.status(200).json({ message: "Added to queue", state: "waiting" });
-  } catch (error) {
-    await session.abortTransaction();
+    res.status(200).json(result);
+    return;
+  } catch (error: any) {
     console.error("❌ Error booking call:", error);
+    if (error.status) {
+      res.status(error.status).json({ message: error.message });
+      return;
+    }
     next(error);
-  } finally {
-    session.endSession();
   }
 };
+
 /**
- * Get the current match for the user.
+ * Get the current match (or matches) for the user.
  */
 export const getCurrentMatch = async (
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
-  try {
-    const userId = req.user?.id;
-    if (!userId) {
-      res.status(401).json({ message: "Authentication required" });
-      return;
-    }
+  const userId = getUserId(req, res);
+  if (!userId) return;
 
-    let queueEntry = await Queue.findOne({ user: userId, status: "matched" })
+  try {
+    const queueEntry = await Queue.findOne({ user: userId, status: "matched" })
       .populate({ path: "matchedWith", select: "-password -__v" })
       .lean();
 
     if (queueEntry?.matchedWith) {
-      res.status(200).json({
-        ...queueEntry.matchedWith,
-        id: queueEntry.matchedWith._id.toString(),
-        _id: undefined,
-      });
+      res.status(200).json(transformUser(queueEntry.matchedWith));
       return;
     }
 
     const user = await User.findById(userId)
       .populate("matches", "-password -__v")
       .lean();
-    if (user?.matches?.length > 0) {
-      res.status(200).json(
-        user.matches.map((match: any) => ({
-          ...match,
-          id: match._id.toString(),
-          _id: undefined,
-        }))
-      );
+    if (user?.matches && user.matches.length > 0) {
+      res.status(200).json(user.matches.map(transformUser));
       return;
     }
 
     res.status(404).json({ message: "No current match found" });
+    return;
   } catch (error) {
     console.error("Error fetching current match:", error);
     next(error);
   }
 };
+
 /**
- * Confirm participation in a match.
+ * Book an appointment.
+ * - Sets appointmentStatus to "booked" on both matched queue entries.
+ * - Notifies the matched user in real time.
  */
-export const confirmParticipation = async (
+export const bookAppointment = async (
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+  const userId = getUserId(req, res);
+  if (!userId) return;
 
   try {
-    const userId = req.user?.id;
-    if (!userId) {
-      res.status(401).json({ message: "Authentication required" });
-      return;
-    }
+    const result = await runInTransaction(async (session) => {
+      // Find the active match for the current user
+      const queueEntry = await Queue.findOne({
+        user: userId,
+        status: "matched",
+      }).session(session);
+      if (!queueEntry || !queueEntry.matchedWith) {
+        throw {
+          status: 400,
+          message: "No active match to book an appointment.",
+        };
+      }
+      const matchedUserId = queueEntry.matchedWith.toString();
 
-    const queueEntry = await Queue.findOne({
-      user: userId,
-      status: "matched",
-    }).session(session);
-    if (!queueEntry || !queueEntry.matchedWith) {
-      res.status(400).json({ message: "No active match to confirm" });
-      return;
-    }
+      // Update both users' queue entries with an appointment flag.
+      // (Assumes your Queue schema supports an optional "appointmentStatus" field.)
+      await Queue.findOneAndUpdate(
+        { user: userId, status: "matched" },
+        { appointmentStatus: "booked" },
+        { session }
+      );
+      await Queue.findOneAndUpdate(
+        { user: matchedUserId, status: "matched" },
+        { appointmentStatus: "booked" },
+        { session }
+      );
 
-    const matchedUserId = queueEntry.matchedWith.toString();
-
-    // Remove the queue entry as the match is confirmed
-    await Queue.deleteOne({ user: userId, status: "matched" }).session(session);
-
-    // Notify the matched user
-    const matchedUser = await User.findById(matchedUserId).session(session);
-    if (matchedUser) {
-      const confirmationNotification = new Notification({
-        user: matchedUser.id,
-        message: `${req.user?.name} has confirmed the match.`,
-        type: "match_confirmation",
-      });
-      await confirmationNotification.save({ session });
-
-      // 🔥 Emit confirmation event
-      io.to(matchedUser.id.toString()).emit("matchConfirmed", {
-        userId,
-        matchedUserId,
-      });
-    }
-
-    await session.commitTransaction();
-
-    // 🔥 Emit updated queue state
-    io.to(userId).emit("queueUpdated", { state: "idle" });
-
-    res.status(200).json({
-      message: "Participation confirmed. You can join the queue again.",
-      state: "idle",
+      return {
+        state: "appointmentBooked",
+        message: "Appointment booked successfully.",
+      };
     });
-  } catch (error) {
-    await session.abortTransaction();
-    console.error("Error confirming participation:", error);
+
+    // Emit a real-time event to both users.
+    io.to(userId).emit("bookAppointment", result);
+    // Also notify the matched user.
+    // (The matched user's id can be included in the result if needed.)
+    res.status(200).json(result);
+    return;
+  } catch (error: any) {
+    console.error("❌ Error booking appointment:", error);
+    if (error.status) {
+      res.status(error.status).json({ message: error.message });
+      return;
+    }
     next(error);
-  } finally {
-    session.endSession();
   }
 };
 
 /**
- * Reset match history for a user.
+ * Skip an appointment.
+ * - Removes the current user's queue entry and resets the match on the other side.
+ * - Notifies the matched user that the appointment was skipped.
+ */
+export const skipAppointment = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  const userId = getUserId(req, res);
+  if (!userId) return;
+
+  try {
+    const result = await runInTransaction(async (session) => {
+      // Find the active match
+      const queueEntry = await Queue.findOne({
+        user: userId,
+        status: "matched",
+      }).session(session);
+      if (!queueEntry || !queueEntry.matchedWith) {
+        throw {
+          status: 400,
+          message: "No active match to skip an appointment.",
+        };
+      }
+      const matchedUserId = queueEntry.matchedWith.toString();
+
+      // Remove the current user's queue entry.
+      await Queue.deleteOne({ user: userId, status: "matched" }).session(
+        session
+      );
+      // For the matched user, update their queue entry to idle and clear the match.
+      await Queue.findOneAndUpdate(
+        { user: matchedUserId, status: "matched" },
+        { status: "idle", matchedWith: null, appointmentStatus: null },
+        { session }
+      );
+
+      // Optionally, remove the match from both users’ match lists here if desired.
+
+      return {
+        state: "idle",
+        message: "Appointment skipped. You are now idle.",
+      };
+    });
+
+    // Emit the skip event to both users.
+    io.to(userId).emit("skipAppointment", result);
+    // Optionally notify the matched user.
+    res.status(200).json(result);
+    return;
+  } catch (error: any) {
+    console.error("❌ Error skipping appointment:", error);
+    if (error.status) {
+      res.status(error.status).json({ message: error.message });
+      return;
+    }
+    next(error);
+  }
+};
+
+/**
+ * Confirm an appointment.
+ * - Removes both users' queue entries.
+ * - Creates a notification for the matched user.
+ * - Notifies both parties via WebSocket.
+ */
+export const confirmAppointment = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  const userId = getUserId(req, res);
+  if (!userId) return;
+
+  try {
+    // Explicitly annotate the return type
+    const result: { state: string; message: string; matchedUserId: string } =
+      await runInTransaction(async (session) => {
+        const queueEntry = await Queue.findOne({
+          user: userId,
+          status: "matched",
+        }).session(session);
+        if (!queueEntry || !queueEntry.matchedWith) {
+          throw {
+            status: 400,
+            message: "No active match to confirm an appointment.",
+          };
+        }
+        const matchedUserId = queueEntry.matchedWith.toString();
+
+        // Remove both users' queue entries.
+        await Queue.deleteMany({
+          user: { $in: [userId, matchedUserId] },
+          status: "matched",
+        }).session(session);
+
+        // Create a notification for the matched user.
+        const matchedUser = await User.findById(matchedUserId).session(session);
+        if (matchedUser) {
+          const confirmationNotification = new Notification({
+            user: matchedUser.id,
+            message: `${req.user?.name} has confirmed the appointment.`,
+            type: "appointment_confirmation",
+          });
+          await confirmationNotification.save({ session });
+        }
+
+        return {
+          state: "idle",
+          message:
+            "Appointment confirmed and both users removed from the queue.",
+          matchedUserId,
+        };
+      });
+
+    // Emit the confirmation event to both users.
+    io.to(userId).emit("confirmAppointment", result);
+    io.to(result.matchedUserId).emit("confirmAppointment", result);
+    res.status(200).json(result);
+    return;
+  } catch (error: any) {
+    console.error("❌ Error confirming appointment:", error);
+    if (error.status) {
+      res.status(error.status).json({ message: error.message });
+      return;
+    }
+    next(error);
+  }
+};
+
+/**
+ * Reset match history for the user.
  */
 export const resetMatches = async (
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+  const userId = getUserId(req, res);
+  if (!userId) return;
 
   try {
-    const userId = req.user?.id;
-    if (!userId) {
-      res.status(401).json({ message: "Authentication required" });
-      return;
-    }
-
-    await User.findByIdAndUpdate(
-      userId,
-      { $set: { matches: [], matchCount: {} } },
-      { session }
-    );
-    await session.commitTransaction();
-
-    // 🔥 Emit queue reset event
+    await runInTransaction(async (session) => {
+      await User.findByIdAndUpdate(
+        userId,
+        { $set: { matches: [], matchCount: {} } },
+        { session }
+      );
+    });
     io.to(userId).emit("queueUpdated", { state: "idle" });
-
     res.status(200).json({ message: "Match history reset successfully" });
+    return;
   } catch (error) {
-    await session.abortTransaction();
     console.error("Error resetting matches:", error);
     next(error);
-  } finally {
-    session.endSession();
   }
 };
 
 /**
- * Get match history for the user.
+ * Get the match history for the user.
  */
 export const getMatchHistory = async (
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
-  try {
-    const userId = req.user?.id;
-    if (!userId) {
-      res.status(401).json({ message: "Authentication required" });
-      return;
-    }
+  const userId = getUserId(req, res);
+  if (!userId) return;
 
+  try {
     const user = await User.findById(userId)
       .populate("matches", "-password -__v")
       .lean();
@@ -279,14 +432,8 @@ export const getMatchHistory = async (
       res.status(404).json({ message: "User not found" });
       return;
     }
-
-    res.status(200).json(
-      user.matches.map((match: any) => ({
-        ...match,
-        id: match._id.toString(),
-        _id: undefined,
-      }))
-    );
+    res.status(200).json(user.matches.map(transformUser));
+    return;
   } catch (error) {
     console.error("Error fetching match history:", error);
     next(error);
@@ -301,20 +448,17 @@ export const getMatchCounts = async (
   res: Response,
   next: NextFunction
 ): Promise<void> => {
-  try {
-    const userId = req.user?.id;
-    if (!userId) {
-      res.status(401).json({ message: "Authentication required" });
-      return;
-    }
+  const userId = getUserId(req, res);
+  if (!userId) return;
 
+  try {
     const user = await User.findById(userId).lean();
     if (!user) {
       res.status(404).json({ message: "User not found" });
       return;
     }
-
     res.status(200).json(user.matchCount);
+    return;
   } catch (error) {
     console.error("Error fetching match counts:", error);
     next(error);
