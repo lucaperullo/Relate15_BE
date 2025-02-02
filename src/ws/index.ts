@@ -71,7 +71,7 @@ export const initializeWebSocket = (server: http.Server) => {
       socket.join(user.id.toString());
 
       const userData = await User.findById(user.id)
-        .populate("matches", "name email profilePictureUrl")
+        .populate("matches", "id name email profilePictureUrl")
         .lean();
 
       if (userData?.matches?.length) {
@@ -190,7 +190,9 @@ export const initializeWebSocket = (server: http.Server) => {
        */
       socket.on("getQueueStatus", async () => {
         try {
-          const queueEntry = await Queue.findOne({ user: user.id }).lean();
+          const queueEntry = await Queue.findOne({ user: user.id })
+            .populate("matchedWith", "id name email profilePictureUrl")
+            .lean();
 
           if (!queueEntry) {
             socket.emit("queueUpdated", { state: "idle" });
@@ -200,7 +202,12 @@ export const initializeWebSocket = (server: http.Server) => {
           socket.emit("queueUpdated", {
             state: queueEntry.status,
             matchedWith: queueEntry.matchedWith
-              ? { id: queueEntry.matchedWith.toString() }
+              ? {
+                  id: queueEntry.matchedWith._id.toString(),
+                  name: queueEntry.matchedWith.name,
+                  email: queueEntry.matchedWith.email,
+                  profilePictureUrl: queueEntry.matchedWith.profilePictureUrl,
+                }
               : undefined,
           });
         } catch (error) {
