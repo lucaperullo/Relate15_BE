@@ -4,7 +4,6 @@ import { authenticate } from "../middleware/authenticate";
 import { asyncHandler } from "../utils/asyncHandler";
 import {
   bookCall,
-  getQueueStatus,
   resetMatches,
   getMatchHistory,
   getCurrentMatch,
@@ -54,36 +53,6 @@ const router = express.Router();
  *         description: Internal server error
  */
 router.post("/book", authenticate, asyncHandler(bookCall));
-
-/**
- * @swagger
- * /api/queue/status:
- *   get:
- *     tags: [Queue]
- *     summary: Get current queue status
- *     description: Retrieve the current queue status and matched user (if any) for the authenticated user.
- *     security:
- *       - cookieAuth: []
- *     responses:
- *       200:
- *         description: Current queue status
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 state:
- *                   type: string
- *                 matchedWith:
- *                   $ref: '#/components/schemas/User'
- *       401:
- *         $ref: '#/components/responses/Unauthorized'
- *       404:
- *         description: No active queue session
- *       500:
- *         description: Internal server error
- */
-router.get("/status", authenticate, asyncHandler(getQueueStatus));
 
 /**
  * @swagger

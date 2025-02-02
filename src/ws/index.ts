@@ -3,6 +3,7 @@ import http from "http";
 import mongoose from "mongoose";
 import User, { IUser } from "../models/User";
 import Chat, { IMessage } from "../models/ChatMessage";
+import Queue from "../models/Queue";
 import { authenticateSocket } from "../middleware/authenticate";
 import crypto from "crypto";
 import dotenv from "dotenv";
@@ -11,7 +12,9 @@ dotenv.config();
 const MESSAGE_SECRET_KEY = Buffer.from(process.env.MESSAGE_SECRET_KEY!, "hex");
 const IV_LENGTH = 16;
 
-// Funzione per crittografare il testo
+/**
+ * Encrypts a message before storing it in DB.
+ */
 function encryptText(text: string): string {
   const iv = crypto.randomBytes(IV_LENGTH);
   const cipher = crypto.createCipheriv("aes-256-cbc", MESSAGE_SECRET_KEY, iv);
@@ -20,7 +23,9 @@ function encryptText(text: string): string {
   return `${iv.toString("hex")}:${encrypted}`;
 }
 
-// Funzione per decrittografare il testo
+/**
+ * Decrypts a message from the database.
+ */
 function decryptText(encryptedText: string): string {
   const [ivHex, encrypted] = encryptedText.split(":");
   const iv = Buffer.from(ivHex, "hex");
@@ -62,24 +67,27 @@ export const initializeWebSocket = (server: http.Server) => {
       }
       console.log(`✅ User ${user.id} connected via WebSocket`);
 
+      // Join user's personal room
+      socket.join(user.id.toString());
+
       const userData = await User.findById(user.id)
         .populate("matches", "name email profilePictureUrl")
         .lean();
 
-      if (!userData) {
-        console.error(`❌ User ${user.id} not found in database`);
-        socket.disconnect();
-        return;
+      if (userData?.matches?.length) {
+        userData.matches.forEach((match: any) => {
+          socket.join(match._id.toString());
+        });
       }
-
-      socket.join(user.id.toString());
-      userData.matches?.forEach((match: any) => {
-        socket.join(match._id.toString());
-      });
       console.log(
-        `✅ User ${user.id} joined ${userData.matches.length} match rooms`
+        `✅ User ${user.id} joined ${
+          userData?.matches?.length || 0
+        } match rooms`
       );
 
+      /**
+       * Handle `joinRoom` event when a user opens a chat.
+       */
       socket.on("joinRoom", async (roomId) => {
         console.log(`📢 User ${user.id} joined room: ${roomId}`);
         socket.join(roomId);
@@ -92,7 +100,7 @@ export const initializeWebSocket = (server: http.Server) => {
             .lean();
 
           if (!chat) {
-            socket.emit("chatHistory", []);
+            socket.emit("chatHistory", { receiverId: roomId, history: [] });
             return;
           }
 
@@ -113,13 +121,16 @@ export const initializeWebSocket = (server: http.Server) => {
           console.log(
             `📜 Sending chat history to ${user.id}: ${messages.length} messages`
           );
-          socket.emit("chatHistory", messages);
+          socket.emit("chatHistory", { receiverId: roomId, history: messages });
         } catch (error) {
           console.error("❌ Error fetching chat history:", error);
           socket.emit("error", "Failed to fetch chat history");
         }
       });
 
+      /**
+       * Handle sending messages between users.
+       */
       socket.on("sendMessage", async ({ receiverId, content }) => {
         try {
           if (!mongoose.Types.ObjectId.isValid(receiverId)) {
@@ -174,6 +185,33 @@ export const initializeWebSocket = (server: http.Server) => {
         }
       });
 
+      /**
+       * Handle queue status updates
+       */
+      socket.on("getQueueStatus", async () => {
+        try {
+          const queueEntry = await Queue.findOne({ user: user.id }).lean();
+
+          if (!queueEntry) {
+            socket.emit("queueUpdated", { state: "idle" });
+            return;
+          }
+
+          socket.emit("queueUpdated", {
+            state: queueEntry.status,
+            matchedWith: queueEntry.matchedWith
+              ? { id: queueEntry.matchedWith.toString() }
+              : undefined,
+          });
+        } catch (error) {
+          console.error("❌ Error fetching queue status:", error);
+          socket.emit("error", "Failed to fetch queue status");
+        }
+      });
+
+      /**
+       * Handle disconnect
+       */
       socket.on("disconnect", () => {
         console.log(`❌ User ${user.id} disconnected`);
       });
@@ -182,5 +220,6 @@ export const initializeWebSocket = (server: http.Server) => {
       socket.disconnect();
     }
   });
+
   console.log("✅ WebSocket initialized.");
 };
