@@ -216,15 +216,26 @@ export const initializeWebSocket = (server: http.Server) => {
       });
 
       socket.on("getQueueStatus", async () => {
+        console.log(`🟢 Received 'getQueueStatus' from user ${user.id}`);
+
         try {
           const queueEntry = await Queue.findOne({ user: user.id })
             .populate("matchedWith", "id name email profilePictureUrl")
             .lean();
 
           if (!queueEntry) {
+            console.log(
+              `⚠️ User ${user.id} is NOT in queue. Sending 'idle' state.`
+            );
             socket.emit("queueUpdated", { state: "idle" });
             return;
           }
+
+          console.log(
+            `🔵 User ${user.id} queue status: ${
+              queueEntry.status
+            }, Matched With: ${queueEntry.matchedWith?.name || "None"}`
+          );
 
           socket.emit("queueUpdated", {
             state: queueEntry.status,
@@ -242,7 +253,6 @@ export const initializeWebSocket = (server: http.Server) => {
           socket.emit("error", "Failed to fetch queue status");
         }
       });
-
       socket.on("disconnect", () => {
         console.log(`❌ User ${user.id} disconnected`);
       });
