@@ -8,17 +8,13 @@ import crypto from "crypto";
 import dotenv from "dotenv";
 
 dotenv.config();
-const MESSAGE_SECRET_KEY = process.env.MESSAGE_SECRET_KEY!;
+const MESSAGE_SECRET_KEY = Buffer.from(process.env.MESSAGE_SECRET_KEY!, "hex");
 const IV_LENGTH = 16;
 
 // Funzione per crittografare il testo
 function encryptText(text: string): string {
   const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv(
-    "aes-256-cbc",
-    Buffer.from(MESSAGE_SECRET_KEY, "hex"),
-    iv
-  );
+  const cipher = crypto.createCipheriv("aes-256-cbc", MESSAGE_SECRET_KEY, iv);
   let encrypted = cipher.update(text, "utf8", "hex");
   encrypted += cipher.final("hex");
   return `${iv.toString("hex")}:${encrypted}`;
@@ -30,7 +26,7 @@ function decryptText(encryptedText: string): string {
   const iv = Buffer.from(ivHex, "hex");
   const decipher = crypto.createDecipheriv(
     "aes-256-cbc",
-    Buffer.from(MESSAGE_SECRET_KEY, "hex"),
+    MESSAGE_SECRET_KEY,
     iv
   );
   let decrypted = decipher.update(encrypted, "hex", "utf8");
@@ -38,14 +34,8 @@ function decryptText(encryptedText: string): string {
   return decrypted;
 }
 
-/**
- * Exported Socket.IO server instance
- */
 export let io: SocketIOServer;
 
-/**
- * Initialize and configure WebSocket server
- */
 export const initializeWebSocket = (server: http.Server) => {
   if (io) {
     console.warn("⚠️ WebSocket already initialized. Skipping duplicate setup.");
@@ -65,16 +55,13 @@ export const initializeWebSocket = (server: http.Server) => {
   io.on("connection", async (socket) => {
     try {
       const user: IUser | undefined = socket.data?.user;
-
       if (!user || !user.id) {
         console.error("❌ WebSocket authentication failed: User not found");
         socket.disconnect();
         return;
       }
-
       console.log(`✅ User ${user.id} connected via WebSocket`);
 
-      // Fetch matched users
       const userData = await User.findById(user.id)
         .populate("matches", "name email profilePictureUrl")
         .lean();
@@ -85,23 +72,14 @@ export const initializeWebSocket = (server: http.Server) => {
         return;
       }
 
-      // Join user’s personal room
       socket.join(user.id.toString());
-
-      // Join rooms for all matched users
-      if (userData.matches?.length) {
-        userData.matches.forEach((match: any) => {
-          socket.join(match._id.toString()); // Ensure match ID is used
-        });
-      }
-
+      userData.matches?.forEach((match: any) => {
+        socket.join(match._id.toString());
+      });
       console.log(
         `✅ User ${user.id} joined ${userData.matches.length} match rooms`
       );
 
-      /**
-       * Handle `joinRoom` event when a user opens a chat.
-       */
       socket.on("joinRoom", async (roomId) => {
         console.log(`📢 User ${user.id} joined room: ${roomId}`);
         socket.join(roomId);
@@ -109,27 +87,24 @@ export const initializeWebSocket = (server: http.Server) => {
         try {
           const chat = await Chat.findOne({
             participants: { $all: [user.id, roomId] },
-          }).populate({
-            path: "messages.sender",
-            select: "id name profilePictureUrl",
-            model: "User", // Ensure it references User model
-          });
+          })
+            .populate("messages.sender", "id name profilePictureUrl")
+            .lean();
 
           if (!chat) {
             socket.emit("chatHistory", []);
             return;
           }
 
-          // Convert messages to proper JSON format
           const messages = chat.messages.map(
             (msg: IMessage & { _id: mongoose.Types.ObjectId }) => ({
-              id: msg._id.toString(), // Convert `_id` to `id`
+              id: msg._id.toString(),
               sender: {
-                id: (msg.sender as any)._id.toString(), // Explicitly cast sender to IUser
+                id: (msg.sender as any)._id.toString(),
                 name: (msg.sender as any).name || "Unknown",
                 profilePictureUrl: (msg.sender as any).profilePictureUrl || "",
               },
-              content: decryptText(msg.content), // ✅ Decrypt message content
+              content: decryptText(msg.content),
               createdAt: msg.createdAt,
               read: msg.read,
             })
@@ -145,9 +120,6 @@ export const initializeWebSocket = (server: http.Server) => {
         }
       });
 
-      /**
-       * Handle sending messages between users.
-       */
       socket.on("sendMessage", async ({ receiverId, content }) => {
         try {
           if (!mongoose.Types.ObjectId.isValid(receiverId)) {
@@ -168,17 +140,16 @@ export const initializeWebSocket = (server: http.Server) => {
 
           const newMessage = {
             sender: senderId,
-            content: encryptText(content), // ✅ Encrypt message content
+            content: encryptText(content),
             createdAt: new Date(),
             read: false,
-            _id: new mongoose.Types.ObjectId(), // ✅ Ensure _id is assigned
+            _id: new mongoose.Types.ObjectId(),
           };
 
           chat.messages.push(newMessage);
           chat.lastMessageAt = new Date();
           await chat.save();
 
-          // Populate sender info before sending
           const senderUser = await User.findById(senderId)
             .select("id name profilePictureUrl")
             .lean();
@@ -190,14 +161,12 @@ export const initializeWebSocket = (server: http.Server) => {
               name: senderUser?.name || "Unknown",
               profilePictureUrl: senderUser?.profilePictureUrl || "",
             },
-            content: content, // ✅ Send the plaintext content to frontend
+            content: content,
             createdAt: newMessage.createdAt,
             read: newMessage.read,
           };
 
           console.log(`📩 Message sent from ${senderId} to ${receiverId}`);
-
-          // Broadcast the message to both sender and receiver rooms
           io.to(senderId).to(receiverId).emit("newMessage", populatedMessage);
         } catch (error) {
           console.error("❌ Error sending message via WebSocket:", error);
@@ -205,9 +174,6 @@ export const initializeWebSocket = (server: http.Server) => {
         }
       });
 
-      /**
-       * Handle disconnect
-       */
       socket.on("disconnect", () => {
         console.log(`❌ User ${user.id} disconnected`);
       });
@@ -216,6 +182,5 @@ export const initializeWebSocket = (server: http.Server) => {
       socket.disconnect();
     }
   });
-
   console.log("✅ WebSocket initialized.");
 };
