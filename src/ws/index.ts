@@ -70,6 +70,7 @@ export const initializeWebSocket = (server: http.Server) => {
       // Join user's personal room
       socket.join(user.id.toString());
 
+      // Fetch user data & join matched rooms
       const userData = await User.findById(user.id)
         .populate("matches", "id name email profilePictureUrl")
         .lean();
@@ -188,6 +189,32 @@ export const initializeWebSocket = (server: http.Server) => {
       /**
        * Handle queue status updates
        */
+      socket.on("joinQueue", async () => {
+        try {
+          const existingEntry = await Queue.findOne({ user: user.id }).lean();
+
+          if (existingEntry) {
+            console.warn(`⚠️ User ${user.id} is already in queue`);
+            socket.emit("error", { message: "You are already in the queue." });
+            return;
+          }
+
+          await new Queue({
+            user: user.id,
+            status: "waiting",
+          }).save();
+
+          console.log(`🔵 User ${user.id} added to queue as 'waiting'`);
+
+          // Notify the user and others
+          socket.emit("queueUpdated", { state: "waiting" });
+          io.emit("queueStatus", { state: "waiting" });
+        } catch (error) {
+          console.error("❌ Error joining queue:", error);
+          socket.emit("error", "Failed to join queue");
+        }
+      });
+
       socket.on("getQueueStatus", async () => {
         try {
           const queueEntry = await Queue.findOne({ user: user.id })
@@ -216,9 +243,6 @@ export const initializeWebSocket = (server: http.Server) => {
         }
       });
 
-      /**
-       * Handle disconnect
-       */
       socket.on("disconnect", () => {
         console.log(`❌ User ${user.id} disconnected`);
       });
