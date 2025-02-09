@@ -11,6 +11,7 @@ import {
   confirmAppointment, // New: Confirm appointment endpoint
   bookAppointment, // New: Book appointment endpoint
   skipAppointment, // New: Skip appointment endpoint
+  confirmDate, // Import the new controller method
 } from "../controllers/queueController";
 
 const router = express.Router();
@@ -254,5 +255,47 @@ router.post(
   authenticate,
   asyncHandler(confirmAppointment)
 );
+
+/**
+ * @swagger
+ * /api/queue/confirm-date:
+ *   post:
+ *     tags: [Queue]
+ *     summary: Confirm a proposed date
+ *     description: Let both matched users confirm a proposed date. When both users confirm the same date, the queue state resets to idle.
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       description: The proposed date to confirm (ISO8601 format).
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               confirmedDate:
+ *                 type: string
+ *                 format: date-time
+ *                 description: The proposed confirmed date for the appointment.
+ *     responses:
+ *       200:
+ *         description: Date confirmation result.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 state:
+ *                   type: string
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: Invalid request or no active match.
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       500:
+ *         description: Internal server error.
+ */
+router.post("/confirm-date", authenticate, asyncHandler(confirmDate));
 
 export default router;

@@ -292,7 +292,7 @@ export const skipAppointment = async (
         { session }
       );
 
-      // Optionally, remove the match from both users’ match lists here if desired.
+      // Optionally, remove the match from both users' match lists here if desired.
 
       return {
         state: "idle",
@@ -461,6 +461,94 @@ export const getMatchCounts = async (
     return;
   } catch (error) {
     console.error("Error fetching match counts:", error);
+    next(error);
+  }
+};
+
+/**
+ * Confirm a date.
+ * - Retrieves the current user's matched queue entry
+ * - Saves the proposed date confirmation in that entry
+ * - Checks the matching user's entry to see if they already confirmed the same date
+ * - If both users have confirmed the same date, it removes both queue entries (setting the state back to idle)
+ * - Otherwise, it returns a "waiting" state until the other user confirms
+ */
+export const confirmDate = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  const userId = getUserId(req, res);
+  if (!userId) return;
+
+  const { confirmedDate } = req.body;
+  if (!confirmedDate) {
+    res.status(400).json({ message: "Confirmed date is required." });
+    return;
+  }
+
+  const proposedDate = new Date(confirmedDate);
+  if (isNaN(proposedDate.getTime())) {
+    res.status(400).json({ message: "Invalid confirmed date format." });
+    return;
+  }
+
+  try {
+    const result = await runInTransaction(async (session) => {
+      // Find the current user's queue entry that is matched
+      const queueEntry = await Queue.findOne({
+        user: userId,
+        status: "matched",
+      }).session(session);
+      if (!queueEntry || !queueEntry.matchedWith) {
+        throw { status: 400, message: "No active match to confirm a date." };
+      }
+
+      // Update the current user's entry with the confirmed date
+      queueEntry.set("confirmedDate", proposedDate);
+      await queueEntry.save({ session });
+
+      const matchedUserId = queueEntry.matchedWith.toString();
+
+      // Retrieve the matched user's queue entry
+      const matchedQueueEntry = await Queue.findOne({
+        user: matchedUserId,
+        status: "matched",
+      }).session(session);
+
+      if (matchedQueueEntry && matchedQueueEntry.get("confirmedDate")) {
+        const otherConfirmedDate = new Date(
+          matchedQueueEntry.get("confirmedDate")
+        );
+        if (otherConfirmedDate.getTime() === proposedDate.getTime()) {
+          // Both users confirmed the same date, so remove both queue entries (reset to idle)
+          await Queue.deleteMany({
+            user: { $in: [userId, matchedUserId] },
+            status: "matched",
+          }).session(session);
+
+          return {
+            state: "idle",
+            message: "Both users confirmed the date. Queue reset to idle.",
+          };
+        }
+      }
+
+      return {
+        state: "waiting",
+        message: "Date confirmed. Awaiting confirmation from the other user.",
+      };
+    });
+
+    // Emit an event to notify the current user (and optionally, the matched user)
+    io.to(userId).emit("queueUpdated", result);
+    res.status(200).json(result);
+  } catch (error: any) {
+    console.error("❌ Error confirming date:", error);
+    if (error.status) {
+      res.status(error.status).json({ message: error.message });
+      return;
+    }
     next(error);
   }
 };

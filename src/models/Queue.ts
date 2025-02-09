@@ -5,6 +5,7 @@ export interface IQueue extends Document {
   status: "idle" | "waiting" | "matched";
   matchedWith?: mongoose.Types.ObjectId;
   appointment?: Date; // 🔥 New: Store appointment date if booked
+  confirmedDate?: Date; // New field for date confirmation
 }
 
 const QueueSchema = new Schema<IQueue>(
@@ -17,6 +18,7 @@ const QueueSchema = new Schema<IQueue>(
     },
     matchedWith: { type: Schema.Types.ObjectId, ref: "User" },
     appointment: { type: Date }, // 🔥 Optional appointment date
+    confirmedDate: { type: Date }, // New field for storing confirmed date
   },
   { timestamps: true }
 );
