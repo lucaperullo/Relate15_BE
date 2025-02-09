@@ -11,7 +11,9 @@ import {
   confirmAppointment, // New: Confirm appointment endpoint
   bookAppointment, // New: Book appointment endpoint
   skipAppointment, // New: Skip appointment endpoint
-  confirmDate, // Import the new controller method
+  confirmDate,
+  updateConfirmedDate, // Import the new controller method
+  getDateProposalStatus, // New: Get current proposal date status
 } from "../controllers/queueController";
 
 const router = express.Router();
@@ -297,5 +299,89 @@ router.post(
  *         description: Internal server error.
  */
 router.post("/confirm-date", authenticate, asyncHandler(confirmDate));
+
+/**
+ * @swagger
+ * /api/queue/update-date:
+ *   patch:
+ *     tags: [Queue]
+ *     summary: Update the provisional confirmed date
+ *     description: Allows a matched user to update their confirmed date if they change their mind. The updated provisional date is returned, along with the provisional date from the other user if available. When both users confirm the same date, the state resets to idle.
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       description: The new confirmed date (ISO8601 format).
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               confirmedDate:
+ *                 type: string
+ *                 format: date-time
+ *                 description: The new confirmed date for the appointment.
+ *     responses:
+ *       200:
+ *         description: Updated date result.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 state:
+ *                   type: string
+ *                 message:
+ *                   type: string
+ *                 confirmedDate:
+ *                   type: string
+ *                   format: date-time
+ *                 otherConfirmedDate:
+ *                   type: string
+ *                   format: date-time
+ *       400:
+ *         description: Invalid request or no active match.
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       500:
+ *         description: Internal server error.
+ */
+router.patch("/update-date", authenticate, asyncHandler(updateConfirmedDate));
+
+/**
+ * @swagger
+ * /api/queue/date-proposal:
+ *   get:
+ *     tags: [Queue]
+ *     summary: Get current proposal date status
+ *     description: Retrieve the current status of the proposed appointment date, including your own proposed date and the matched user's provisional date (if available).
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Current proposal status retrieved.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 state:
+ *                   type: string
+ *                 message:
+ *                   type: string
+ *                 myProposedDate:
+ *                   type: string
+ *                   format: date-time
+ *                 theirProposedDate:
+ *                   type: string
+ *                   format: date-time
+ *                 matchedUserId:
+ *                   type: string
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       500:
+ *         description: Internal server error.
+ */
+router.get("/date-proposal", authenticate, asyncHandler(getDateProposalStatus));
 
 export default router;

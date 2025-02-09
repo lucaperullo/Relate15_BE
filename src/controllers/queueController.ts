@@ -67,6 +67,19 @@ export const bookCall = async (
   const userId = getUserId(req, res);
   if (!userId) return;
 
+  // Prevent booking if there's an existing active queue entry (waiting or matched)
+  const existingEntry = await Queue.findOne({
+    user: userId,
+    status: { $in: ["waiting", "matched"] },
+  });
+  if (existingEntry) {
+    res.status(400).json({
+      message:
+        "You already have an active booking. Complete your current call or cancel it before booking a new one.",
+    });
+    return;
+  }
+
   try {
     const result = await runInTransaction(async (session) => {
       const currentUser = await User.findById(userId).session(session);
@@ -495,7 +508,7 @@ export const confirmDate = async (
 
   try {
     const result = await runInTransaction(async (session) => {
-      // Find the current user's queue entry that is matched
+      // Find the current user's matched queue entry
       const queueEntry = await Queue.findOne({
         user: userId,
         status: "matched",
@@ -504,10 +517,108 @@ export const confirmDate = async (
         throw { status: 400, message: "No active match to confirm a date." };
       }
 
-      // Update the current user's entry with the confirmed date
+      // Save the provisional (confirmed) date for the current user
       queueEntry.set("confirmedDate", proposedDate);
       await queueEntry.save({ session });
+      const matchedUserId = queueEntry.matchedWith.toString();
 
+      // Retrieve the matched user's queue entry to check for an existing provisional date
+      const matchedQueueEntry = await Queue.findOne({
+        user: matchedUserId,
+        status: "matched",
+      }).session(session);
+
+      let resultPayload;
+      if (matchedQueueEntry && matchedQueueEntry.get("confirmedDate")) {
+        const theirProposedDate = new Date(
+          matchedQueueEntry.get("confirmedDate")
+        );
+        if (theirProposedDate.getTime() === proposedDate.getTime()) {
+          // Both users confirmed the same date
+          await Queue.deleteMany({
+            user: { $in: [userId, matchedUserId] },
+            status: "matched",
+          }).session(session);
+          resultPayload = {
+            state: "idle",
+            message: "Both users confirmed the date. Queue reset to idle.",
+            myProposedDate: proposedDate,
+            theirProposedDate,
+            matchedUserId,
+          };
+        } else {
+          // Dates do not match; return waiting state.
+          resultPayload = {
+            state: "waiting",
+            message:
+              "Date confirmed. Awaiting confirmation from the other user.",
+            myProposedDate: proposedDate,
+            theirProposedDate,
+            matchedUserId,
+          };
+        }
+      } else {
+        // Other user hasn't proposed a date yet.
+        resultPayload = {
+          state: "waiting",
+          message: "Date confirmed. Awaiting confirmation from the other user.",
+          myProposedDate: proposedDate,
+          matchedUserId,
+        };
+      }
+      return resultPayload;
+    });
+
+    // Emit real-time notification to both users (instant update)
+    io.to(userId).emit("queueUpdated", result);
+    if (result.matchedUserId) {
+      io.to(result.matchedUserId).emit("queueUpdated", result);
+    }
+    res.status(200).json(result);
+  } catch (error: any) {
+    console.error("❌ Error confirming date:", error);
+    if (error.status) {
+      res.status(error.status).json({ message: error.message });
+      return;
+    }
+    next(error);
+  }
+};
+
+export const updateConfirmedDate = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  const userId = getUserId(req, res);
+  if (!userId) return;
+
+  const { confirmedDate } = req.body;
+  if (!confirmedDate) {
+    res.status(400).json({ message: "Confirmed date is required." });
+    return;
+  }
+
+  const updatedDate = new Date(confirmedDate);
+  if (isNaN(updatedDate.getTime())) {
+    res.status(400).json({ message: "Invalid confirmed date format." });
+    return;
+  }
+
+  try {
+    const result = await runInTransaction(async (session) => {
+      // Find the current user's matched queue entry
+      const queueEntry = await Queue.findOne({
+        user: userId,
+        status: "matched",
+      }).session(session);
+      if (!queueEntry || !queueEntry.matchedWith) {
+        throw { status: 400, message: "No active match to update a date." };
+      }
+
+      // Update the user's confirmed date to the new value
+      queueEntry.set("confirmedDate", updatedDate);
+      await queueEntry.save({ session });
       const matchedUserId = queueEntry.matchedWith.toString();
 
       // Retrieve the matched user's queue entry
@@ -516,39 +627,104 @@ export const confirmDate = async (
         status: "matched",
       }).session(session);
 
+      let resultPayload;
       if (matchedQueueEntry && matchedQueueEntry.get("confirmedDate")) {
-        const otherConfirmedDate = new Date(
+        const theirProposedDate = new Date(
           matchedQueueEntry.get("confirmedDate")
         );
-        if (otherConfirmedDate.getTime() === proposedDate.getTime()) {
-          // Both users confirmed the same date, so remove both queue entries (reset to idle)
+        if (theirProposedDate.getTime() === updatedDate.getTime()) {
+          // Both users confirmed the same date
           await Queue.deleteMany({
             user: { $in: [userId, matchedUserId] },
             status: "matched",
           }).session(session);
-
-          return {
+          resultPayload = {
             state: "idle",
             message: "Both users confirmed the date. Queue reset to idle.",
+            myProposedDate: updatedDate,
+            theirProposedDate,
+            matchedUserId,
+          };
+        } else {
+          // Dates do not match; return waiting state.
+          resultPayload = {
+            state: "waiting",
+            message: "Date updated. Awaiting confirmation from the other user.",
+            myProposedDate: updatedDate,
+            theirProposedDate,
+            matchedUserId,
           };
         }
+      } else {
+        // Other user hasn't proposed a date yet.
+        resultPayload = {
+          state: "waiting",
+          message: "Date updated. Awaiting confirmation from the other user.",
+          myProposedDate: updatedDate,
+          matchedUserId,
+        };
       }
-
-      return {
-        state: "waiting",
-        message: "Date confirmed. Awaiting confirmation from the other user.",
-      };
+      return resultPayload;
     });
 
-    // Emit an event to notify the current user (and optionally, the matched user)
+    // Emit an event to update both users instantly
     io.to(userId).emit("queueUpdated", result);
+    if (result.matchedUserId) {
+      io.to(result.matchedUserId).emit("queueUpdated", result);
+    }
     res.status(200).json(result);
   } catch (error: any) {
-    console.error("❌ Error confirming date:", error);
+    console.error("❌ Error updating confirmed date:", error);
     if (error.status) {
       res.status(error.status).json({ message: error.message });
       return;
     }
+    next(error);
+  }
+};
+
+export const getDateProposalStatus = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  const userId = getUserId(req, res);
+  if (!userId) return;
+
+  try {
+    // Look up the user's active (matched) queue entry
+    const queueEntry = await Queue.findOne({
+      user: userId,
+      status: "matched",
+    }).lean();
+    if (!queueEntry) {
+      res.status(200).json({
+        state: "idle",
+        message: "No active match or date proposal available.",
+      });
+      return;
+    }
+
+    const myProposedDate = queueEntry.confirmedDate || null;
+    let theirProposedDate = null;
+
+    if (queueEntry.matchedWith) {
+      const partnerEntry = await Queue.findOne({
+        user: queueEntry.matchedWith,
+        status: "matched",
+      }).lean();
+      if (partnerEntry) {
+        theirProposedDate = partnerEntry.confirmedDate || null;
+      }
+    }
+    res.status(200).json({
+      state: queueEntry.status,
+      message: "Current proposal status retrieved.",
+      myProposedDate,
+      theirProposedDate,
+      matchedUserId: queueEntry.matchedWith,
+    });
+  } catch (error) {
     next(error);
   }
 };
